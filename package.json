@@ -1,6 +1,6 @@
 {
   "name": "dc-to-dz",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "cheerio": "^1.1.2",
-    "discordjs": "^14.25.1",
+    "discord.js": "^14.25.1",
     "playwright": "^1.63.0"
   }
 }
