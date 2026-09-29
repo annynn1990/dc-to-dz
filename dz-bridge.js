@@ -124,19 +124,32 @@
       for (const item of data.items || []) {
         try {
           const url = await postPendingItem(item);
-          await api("/bridge/ack", {
+          const ack = await api("/bridge/ack", {
             method: "POST",
-            body: JSON.stringify({ id: item.id, ok: true, url })
+            body: JSON.stringify({
+              id: item.id,
+              ok: true,
+              url,
+              stage: "discuz-submit"
+            })
           });
           state.lastOutbound = new Date().toISOString();
-          log("Discord → Discuz 成功:", item.id, url);
+          state.lastAck = ack.result || null;
+          log("Discord → Discuz 成功:", item.id, url, state.lastAck);
         } catch (error) {
           setError(error);
           try {
-            await api("/bridge/ack", {
+            const ack = await api("/bridge/ack", {
               method: "POST",
-              body: JSON.stringify({ id: item.id, ok: false })
+              body: JSON.stringify({
+                id: item.id,
+                ok: false,
+                error: String(error && error.message ? error.message : error),
+                stage: "discuz-submit"
+              })
             });
+            state.lastAck = ack.result || null;
+            log("Discord → Discuz 失敗:", item.id, state.lastAck);
           } catch (ackError) {
             setError(ackError);
           }
