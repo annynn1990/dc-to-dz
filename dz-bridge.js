@@ -67,72 +67,95 @@
     return new URL(url, location.href).href;
   }
 
-  async function postPendingItem(item) {
-    const url = absolute(FORUM_ROOT + "forum.php?mod=post&action=newthread&fid=" + encodeURIComponent(FORUM_ID));
-    const frame = document.createElement("iframe");
-    frame.style.cssText = "position:fixed;width:2px;height:2px;left:-9999px;top:-9999px;border:0;";
-    document.body.appendChild(frame);
+  function extractFormHash(html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const input = doc.querySelector('[name="formhash"]');
+    if (input && input.value) return input.value;
 
-    try {
-      await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("Discuz 發帖頁載入逾時")), 20000);
-        frame.onload = () => { clearTimeout(timer); resolve(); };
-        frame.onerror = () => { clearTimeout(timer); reject(new Error("Discuz 發帖頁載入失敗")); };
-        frame.src = url;
+    const patterns = [
+      /(?:var\\s+)?formhash\\s*[:=]\\s*["']([a-f0-9]+)["']/i,
+      /FORMHASH\\s*=\\s*["']([a-f0-9]+)["']/i
+    ];
+    for (const re of patterns) {
+      const match = html.match(re);
+      if (match && match[1]) return match[1];
+    }
+    return null;
+  }
+
+  async function getForumFormHash() {
+    const candidates = [
+      FORUM_ROOT + "forum.php?mod=forumdisplay&fid=" + encodeURIComponent(FORUM_ID),
+      FORUM_ROOT
+    ];
+
+    for (const path of candidates) {
+      const response = await fetch(absolute(path), {
+        credentials: "same-origin",
+        cache: "no-store"
       });
-
-      const doc = frame.contentDocument;
-      if (!doc) throw new Error("無法取得 Discuz 發帖頁");
-      const bodyText = doc.body ? doc.body.textContent || "" : "";
-      const html = doc.documentElement ? doc.documentElement.outerHTML : "";
+      const html = await response.text();
 
       if (/請稍候|just a moment|checking your browser|verify you are human/i.test(html)) {
-        showChallengeNotice();
-        throw new Error("Discuz 發帖頁仍是 Cloudflare 驗證頁");
+        continue;
       }
 
-      clearChallengeNotice();
-
-      const form = doc.querySelector("form#postform") ||
-        doc.querySelector('form[action*="forum.php"][action*="post"]');
-      if (!form) throw new Error("找不到 Discuz 發帖表單");
-      const hash = form.querySelector('[name="formhash"]');
-      if (!hash || !hash.value) throw new Error("找不到 formhash，請確認帝國郵政仍登入");
-
-      const subject = form.querySelector('[name="subject"]');
-      const message = form.querySelector('[name="message"]');
-      if (!subject || !message) throw new Error("Discuz 發帖欄位結構不同");
-
-      subject.value = item.subject;
-      message.value = item.message;
-      message.dispatchEvent(new Event("input", {bubbles:true}));
-      message.dispatchEvent(new Event("change", {bubbles:true}));
-
-      const submit = form.querySelector('[type="submit"]');
-      if (!submit) throw new Error("找不到發表主題按鈕");
-
-      form.requestSubmit(submit);
-      await new Promise(r => setTimeout(r, 1800));
-
-      const result = frame.contentDocument;
-      const resultHtml = result && result.documentElement ? result.documentElement.outerHTML : "";
-      const resultText = result && result.body ? result.body.textContent || "" : "";
-      const resultUrl = frame.contentWindow.location.href;
-
-      if (/尚未登錄|尚未登入|請先登錄|沒有權限|權限不足/i.test(resultText + resultHtml)) {
-        throw new Error("Discuz 拒絕發帖：登入狀態或權限有問題");
-      }
-      if (/請稍候|just a moment|checking your browser|verify you are human/i.test(resultHtml)) {
-        showChallengeNotice();
-        throw new Error("Discuz 發帖回應仍是 Cloudflare 驗證頁");
-      }
-      if (/thread-\d+/i.test(resultUrl) || /發表成功|發帖成功|主題已發布|succeedhandle/i.test(resultText + resultHtml)) {
-        return resultUrl;
-      }
-      throw new Error("Discuz 表單已提交，但尚未確認建立主題");
-    } finally {
-      frame.remove();
+      const formhash = extractFormHash(html);
+      if (formhash) return formhash;
     }
+
+    throw new Error("找不到可用的 Discuz formhash");
+  }
+
+  async function postPendingItem(item) {
+    const formhash = await getForumFormHash();
+    const postUrl = absolute(
+      FORUM_ROOT + "forum.php?mod=post&action=newthread&fid=" + encodeURIComponent(FORUM_ID) + "&topicsubmit=yes"
+    );
+
+    const params = new URLSearchParams({
+      formhash,
+      subject: String(item.subject || "Discord 訊息").slice(0, 80),
+      message: String(item.message || ""),
+      posttime: String(Math.floor(Date.now() / 1000)),
+      topicsubmit: "yes",
+      usesig: "1",
+      allownoticeauthor: "1",
+      wysiwyg: "0"
+    });
+
+    const response = await fetch(postUrl, {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "follow",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: params.toString()
+    });
+
+    const resultHtml = await response.text();
+    const resultUrl = response.url || "";
+
+    if (/請稍候|just a moment|checking your browser|verify you are human/i.test(resultHtml)) {
+      throw new Error("Discuz POST 仍被 Cloudflare 驗證攔下");
+    }
+
+    if (/尚未登錄|尚未登入|請先登錄|沒有權限|權限不足/i.test(resultHtml)) {
+      throw new Error("Discuz 拒絕發帖：登入狀態或論壇權限有問題");
+    }
+
+    const threadMatch = resultHtml.match(/thread-(\\d+)-1-1\\.html/i);
+    if (threadMatch) {
+      return absolute("thread-" + threadMatch[1] + "-1-1.html");
+    }
+
+    if (/發表成功|發帖成功|主題已發布|succeedhandle/i.test(resultHtml)) {
+      return resultUrl || absolute(FORUM_ROOT);
+    }
+
+    throw new Error("Discuz POST 已送出，但回應無法確認建立主題");
   }
 
   async function relayDiscordToDiscuz() {
