@@ -183,6 +183,23 @@ const server = createServer(async (req, res) => {
     }
   }
 
+  if (req.method === "POST" && url.pathname === "/bridge/scan-status") {
+    if (!ALLOWED_ORIGINS.has(origin)) {
+      return json(res, 403, { ok: false, error: "origin-not-allowed" }, origin);
+    }
+    try {
+      const body = JSON.parse(await readBody(req));
+      console.log(JSON.stringify({
+        type: "discuz_scan_status",
+        ...body,
+        at: new Date().toISOString()
+      }));
+      return json(res, 200, { ok: true }, origin);
+    } catch {
+      return json(res, 400, { ok: false, error: "invalid-json" }, origin);
+    }
+  }
+
   if (req.method === "POST" && url.pathname === "/bridge/forum-post") {
     if (!ALLOWED_ORIGINS.has(origin)) {
       return json(res, 403, { ok: false, error: "origin-not-allowed" });
