@@ -174,7 +174,7 @@
     subject.dispatchEvent(new Event("change", {bubbles:true}));
 
     const wysiwyg = form.querySelector('[name="wysiwyg"]');
-    if (wysiwyg) wysiwyg.value = "1";
+    if (wysiwyg) wysiwyg.value = "0";
 
     message.value = item.message;
     message.dispatchEvent(new Event("input", {bubbles:true}));
@@ -209,15 +209,12 @@
       form.querySelector('[type="submit"]');
     if (!submit) throw new Error("找不到發表主題按鈕");
 
+    // Submit the actual HTML form directly. This avoids depending on
+    // Discuz's WYSIWYG iframe JavaScript and sends the textarea value.
     const beforeUrl = relayWindow.location.href;
-    const beforeHtml = relayWindow.document.documentElement
-      ? relayWindow.document.documentElement.outerHTML.slice(0, 200000)
-      : "";
+    HTMLFormElement.prototype.submit.call(form);
 
-    // Native click runs Discuz's own submit handlers (including editor sync).
-    submit.click();
-
-    const deadline = Date.now() + 30000;
+    const deadline = Date.now() + 45000;
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 500));
 
