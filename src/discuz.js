@@ -79,24 +79,40 @@ export class DiscuzBridge {
       const page = await context.newPage();
       const loginUrl = joinUrl(this.baseUrl, "member.php?mod=logging&action=login");
       await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-      await page.waitForTimeout(8000);
 
-      for (let i = 0; i < 3 && /just a moment|checking your browser|verify you are human/i.test(await page.title()); i++) {
-        await page.waitForTimeout(7000);
+      // Some Discuz/Cloudflare configurations keep the browser on a
+      // temporary "請稍候..." page before the real login form appears.
+      // Wait for the actual form instead of assuming a fixed short delay.
+      let html = "";
+      let title = "";
+      let formhash = null;
+      let loginhash = null;
+
+      for (let i = 0; i < 30; i++) {
+        await page.waitForTimeout(3000);
+        html = await page.content();
+        title = (await page.title()).trim();
+        formhash = extractFormHash(html);
+        loginhash = extractLoginHash(html);
+
+        if (formhash) break;
+
+        if (/just a moment|checking your browser|verify you are human/i.test(title)) {
+          continue;
+        }
+
+        if (!/請稍候|loading|wait/i.test(title) && i >= 5) {
+          break;
+        }
       }
 
-      const html = await page.content();
-      const title = (await page.title()).trim();
-      if (/just a moment|checking your browser|verify you are human/i.test(title)) {
+      if (!formhash && /just a moment|checking your browser|verify you are human/i.test(title)) {
         throw new Error("Cloudflare browser challenge did not clear automatically; manual verification is required.");
       }
 
       for (const cookie of await context.cookies()) {
         this.cookies.set(cookie.name, cookie.value);
       }
-
-      let formhash = extractFormHash(html);
-      let loginhash = extractLoginHash(html);
 
       if (!formhash) {
         const fallback = await page.goto(joinUrl(this.baseUrl, "forum.php"), { waitUntil: "domcontentloaded", timeout: 30000 });
