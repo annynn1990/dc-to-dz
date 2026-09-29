@@ -54,108 +54,137 @@
     return new URL(url, location.href).href;
   }
 
-  async function postPendingItem(item) {
-    const url = absolute(FORUM_ROOT + "forum.php?mod=post&action=newthread&fid=" + encodeURIComponent(FORUM_ID));
+  let relayWindow = null;
+  let relayWindowReady = false;
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20000);
-
-    try {
-      const response = await fetch(url, {
-        method: "GET",
-        credentials: "same-origin",
-        cache: "no-store",
-        signal: controller.signal,
-        headers: {
-          "Accept": "text/html"
-        }
-      });
-
-      const html = await response.text();
-
-      if (!response.ok) {
-        throw new Error("Discuz 發帖頁 HTTP " + response.status);
+  function ensureRelayButton() {
+    if (document.getElementById("wongming-dz-relay-button")) return;
+    const button = document.createElement("button");
+    button.id = "wongming-dz-relay-button";
+    button.type = "button";
+    button.textContent = "啟用帝國郵政同步";
+    button.style.cssText = [
+      "position:fixed","right:16px","bottom:16px","z-index:2147483647",
+      "padding:9px 14px","border:1px solid #c9a227","border-radius:8px",
+      "background:#fff9df","color:#6b4f00","font:14px sans-serif","cursor:pointer",
+      "box-shadow:0 2px 8px rgba(0,0,0,.15)"
+    ].join(";");
+    button.addEventListener("click", () => {
+      relayWindow = window.open(
+        absolute(FORUM_ROOT + "forum.php?mod=post&action=newthread&fid=" + encodeURIComponent(FORUM_ID)),
+        "WongMingDZRelay",
+        "width=900,height=700,left=20,top=20"
+      );
+      relayWindowReady = !!relayWindow;
+      if (!relayWindow) {
+        button.textContent = "瀏覽器阻擋視窗，請再點一次";
+        return;
       }
+      button.textContent = "同步視窗已開啟";
+      setTimeout(() => button.remove(), 3000);
+    });
+    document.body.appendChild(button);
+  }
 
-      if (/請稍候|just a moment|checking your browser|verify you are human/i.test(html)) {
-        throw new Error("Discuz 發帖頁仍是 Cloudflare 驗證頁");
+  async function waitForRelayWindow() {
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      if (!relayWindow || relayWindow.closed) {
+        relayWindowReady = false;
+        throw new Error("同步視窗已關閉，請按「啟用帝國郵政同步」");
       }
-
-      const doc = new DOMParser().parseFromString(html, "text/html");
-      const form = doc.querySelector("form#postform") ||
-        doc.querySelector('form[action*="forum.php"][action*="post"]');
-      if (!form) throw new Error("找不到 Discuz 發帖表單");
-
-      const hash = form.querySelector('[name="formhash"]');
-      if (!hash || !hash.value) throw new Error("找不到 formhash，請確認帝國郵政仍登入");
-
-      const subject = form.querySelector('[name="subject"]');
-      const message = form.querySelector('[name="message"]');
-      if (!subject || !message) throw new Error("Discuz 發帖欄位結構不同");
-
-      const submitAction = form.getAttribute("action") || url;
-      const submitUrl = absolute(submitAction);
-      const formData = new FormData(form);
-
-      formData.set("subject", item.subject);
-      formData.set("message", item.message);
-
-      const submitButton = form.querySelector('[name="topicsubmit"], [type="submit"]');
-      if (submitButton && submitButton.name) {
-        formData.set(submitButton.name, submitButton.value || "yes");
-      } else if (!formData.has("topicsubmit")) {
-        formData.set("topicsubmit", "yes");
-      }
-
-      const submitController = new AbortController();
-      const submitTimer = setTimeout(() => submitController.abort(), 20000);
 
       try {
-        const submitResponse = await fetch(submitUrl, {
-          method: "POST",
-          credentials: "same-origin",
-          cache: "no-store",
-          redirect: "follow",
-          signal: submitController.signal,
-          body: formData
-        });
+        const doc = relayWindow.document;
+        const html = doc && doc.documentElement ? doc.documentElement.outerHTML : "";
+        const text = doc && doc.body ? doc.body.textContent || "" : "";
+        const form = doc && (doc.querySelector("form#postform") ||
+          doc.querySelector('form[action*="forum.php"][action*="post"]'));
 
-        const resultHtml = await submitResponse.text();
-        const resultUrl = submitResponse.url || submitUrl;
+        if (form) return form;
 
-        if (!submitResponse.ok) {
-          throw new Error("Discuz 發帖 HTTP " + submitResponse.status);
+        if (/請稍候|just a moment|checking your browser|verify you are human/i.test(html + text)) {
+          state.lastError = "同步視窗正在等待 Cloudflare 驗證";
         }
+      } catch (error) {
+        if (!/SecurityError|cross-origin|Cross origin/i.test(String(error))) {
+          throw error;
+        }
+      }
 
-        if (/尚未登錄|尚未登入|請先登錄|沒有權限|權限不足/i.test(resultHtml)) {
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    throw new Error("同步視窗等待 Cloudflare／Discuz 發帖表單逾時");
+  }
+
+  async function postPendingItem(item) {
+    ensureRelayButton();
+
+    if (!relayWindow || relayWindow.closed) {
+      throw new Error("請先按「啟用帝國郵政同步」，讓瀏覽器開啟正常發帖視窗");
+    }
+
+    const form = await waitForRelayWindow();
+    const hash = form.querySelector('[name="formhash"]');
+    if (!hash || !hash.value) throw new Error("Discuz 發帖表單沒有 formhash");
+
+    const subject = form.querySelector('[name="subject"]');
+    const message = form.querySelector('[name="message"]');
+    if (!subject || !message) throw new Error("Discuz 發帖欄位結構不同");
+
+    subject.value = item.subject;
+    message.value = item.message;
+    message.dispatchEvent(new Event("input", {bubbles:true}));
+    message.dispatchEvent(new Event("change", {bubbles:true}));
+
+    const submit = form.querySelector('[type="submit"]');
+    if (!submit) throw new Error("找不到發表主題按鈕");
+
+    const beforeUrl = relayWindow.location.href;
+    form.requestSubmit(submit);
+
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 500));
+
+      try {
+        const doc = relayWindow.document;
+        const html = doc && doc.documentElement ? doc.documentElement.outerHTML : "";
+        const text = doc && doc.body ? doc.body.textContent || "" : "";
+        const currentUrl = relayWindow.location.href;
+
+        if (/尚未登錄|尚未登入|請先登錄|沒有權限|權限不足/i.test(html + text)) {
           throw new Error("Discuz 拒絕發帖：登入狀態或權限有問題");
         }
 
-        const tidMatch =
-          resultUrl.match(/[?&]tid=(\d+)/i) ||
-          resultHtml.match(/[?&]tid=(\d+)/i) ||
-          resultHtml.match(/thread-(\d+)-1-1\.html/i);
+        const tid =
+          currentUrl.match(/thread-(\d+)(?:-|\.html)/i) ||
+          currentUrl.match(/[?&]tid=(\d+)/i) ||
+          html.match(/thread-(\d+)-1-1\.html/i);
 
-        if (tidMatch) {
-          return resultUrl;
+        if (tid) {
+          const successUrl = currentUrl;
+          try { relayWindow.close(); } catch {}
+          relayWindow = null;
+          relayWindowReady = false;
+          return successUrl;
         }
 
-        if (/發表成功|發帖成功|主題已發布|succeedhandle|操作成功/i.test(resultHtml)) {
-          return resultUrl;
+        if (currentUrl !== beforeUrl && /發表成功|發帖成功|主題已發布|succeedhandle|操作成功/i.test(html + text)) {
+          const successUrl = currentUrl;
+          try { relayWindow.close(); } catch {}
+          relayWindow = null;
+          relayWindowReady = false;
+          return successUrl;
         }
-
-        throw new Error("Discuz 表單已提交，但尚未確認建立主題");
-      } finally {
-        clearTimeout(submitTimer);
+      } catch (error) {
+        if (/SecurityError|cross-origin|Cross origin/i.test(String(error))) continue;
+        throw error;
       }
-    } catch (error) {
-      if (error && error.name === "AbortError") {
-        throw new Error("Discuz 發帖請求逾時");
-      }
-      throw error;
-    } finally {
-      clearTimeout(timer);
     }
+
+    throw new Error("Discuz 表單已提交，但尚未確認建立主題");
   }
 
   async function relayDiscordToDiscuz() {
