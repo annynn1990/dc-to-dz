@@ -119,14 +119,33 @@ const server = createServer(async (req, res) => {
     try {
       const body = JSON.parse(await readBody(req));
       const id = String(body.id || "");
-      const ok = body.ok === true;
+      const relayOk = body.ok === true;
       const item = pendingById.get(id);
+      const result = {
+        messageId: id,
+        relayOk,
+        tid: String(body.tid || ""),
+        url: String(body.url || ""),
+        error: String(body.error || ""),
+        stage: String(body.stage || ""),
+        at: new Date().toISOString()
+      };
+
+      console.log(JSON.stringify({
+        type: relayOk ? "discord_to_discuz_relay_success" : "discord_to_discuz_relay_failure",
+        ...result
+      }));
 
       if (!item) {
-        return json(res, 200, { ok: true, ignored: true }, origin);
+        console.log(JSON.stringify({
+          type: "discord_to_discuz_ack_ignored",
+          messageId: id,
+          relayOk
+        }));
+        return json(res, 200, { ok: true, ignored: true, result }, origin);
       }
 
-      if (ok) {
+      if (relayOk) {
         pendingById.delete(id);
         const index = pendingToDiscuz.findIndex(x => x.id === id);
         if (index >= 0) pendingToDiscuz.splice(index, 1);
@@ -134,7 +153,7 @@ const server = createServer(async (req, res) => {
         delete item.claimedUntil;
       }
 
-      return json(res, 200, { ok: true }, origin);
+      return json(res, 200, { ok: true, result }, origin);
     } catch {
       return json(res, 400, { ok: false, error: "invalid-json" }, origin);
     }
