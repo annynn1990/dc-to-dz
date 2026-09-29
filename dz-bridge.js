@@ -77,28 +77,38 @@
 
     const wrap = document.createElement("div");
     wrap.id = "wongming-dz-relay-button";
-    wrap.style.cssText = [
-      "position:fixed","left:18px","bottom:18px",
-      "z-index:2147483647","max-width:180px","filter:drop-shadow(0 4px 12px rgba(0,0,0,.18))"
-    ].join(";");
+    wrap.setAttribute("style", [
+      "position:fixed !important",
+      "left:18px !important",
+      "bottom:18px !important",
+      "z-index:2147483647 !important",
+      "display:block !important",
+      "visibility:visible !important",
+      "opacity:1 !important",
+      "pointer-events:auto !important"
+    ].join(";"));
 
     const button = document.createElement("button");
     button.type = "button";
     button.setAttribute("aria-label", "你有一則簡訊");
-    button.innerHTML = '<strong style="font-size:14px">你有一則簡訊</strong>';
-    button.style.cssText = [
-      "display:block","padding:11px 15px","border:1px solid #c9a227",
-      "border-radius:12px","background:linear-gradient(135deg,#fffdf2,#fff3bd)",
-      "color:#6b4f00","font:14px/1.2 sans-serif","cursor:pointer",
-      "text-align:center","animation:wongmingDzPulse 2s ease-in-out infinite",
-      "box-shadow:0 4px 14px rgba(107,79,0,.18)"
-    ].join(";");
-
-    const style = document.createElement("style");
-    style.textContent = "@keyframes wongmingDzPulse{0%,100%{transform:translateX(0)}50%{transform:translateX(4px)}}";
+    button.textContent = "你有一則簡訊";
+    button.setAttribute("style", [
+      "display:block !important",
+      "visibility:visible !important",
+      "opacity:1 !important",
+      "padding:12px 18px !important",
+      "border:1px solid #c9a227 !important",
+      "border-radius:14px !important",
+      "background:#fff8d9 !important",
+      "color:#6b4f00 !important",
+      "font:14px/1.2 sans-serif !important",
+      "cursor:pointer !important",
+      "box-shadow:0 5px 18px rgba(0,0,0,.22) !important"
+    ].join(";"));
 
     button.addEventListener("click", () => {
       relayEnabled = true;
+      wrap.remove();
       try {
         relayWindow = window.open(
           absolute(FORUM_ROOT + "forum.php?mod=post&action=newthread&fid=" + encodeURIComponent(FORUM_ID)),
@@ -106,23 +116,28 @@
           "width=900,height=700,left=20,top=20"
         );
         relayWindowReady = !!relayWindow;
-
         if (!relayWindow) {
-          button.innerHTML = '<span style="display:block;font-size:12px">瀏覽器阻擋視窗</span><strong style="font-size:14px">再點一次</strong>';
+          relayEnabled = false;
+          ensureRelayButton();
           return;
         }
-
-        wrap.remove();
         relayDiscordToDiscuz();
       } catch (error) {
+        relayEnabled = false;
         setError(error);
+        ensureRelayButton();
       }
     });
 
-    wrap.appendChild(style);
     wrap.appendChild(button);
-    document.body.appendChild(wrap);
+
+    const parent = document.body || document.documentElement;
+    if (parent) {
+      parent.appendChild(wrap);
+      log("通知已顯示，pending:", state.pending);
+    }
   }
+
 
   async function checkPendingNotification() {
     if (relayEnabled || document.getElementById("wongming-dz-relay-button")) return;
