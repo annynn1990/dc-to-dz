@@ -2,7 +2,7 @@
 (function () {
   "use strict";
 
-  const BRIDGE_VERSION = "2026.09.29.16";
+  const BRIDGE_VERSION = "2026.09.29.17";
   window.__WONGMING_DZ_BRIDGE_RUNTIME__ = BRIDGE_VERSION;
   window.__WONGMING_DZ_BRIDGE_LAST_LOAD__ = Date.now();
 
@@ -384,11 +384,25 @@
 
     for (const a of doc.querySelectorAll("a[href]")) {
       const href = a.getAttribute("href") || "";
-      const m = href.match(/thread-(\d+)-1-1\.html/);
-      if (!m) continue;
+      let tid = "";
 
-      const tid = m[1];
-      if (seen.has(tid)) continue;
+      // Discuz can expose thread links in either SEO form
+      // (thread-123-1-1.html) or normal forum.php?mod=viewthread&tid=123 form.
+      const seo = href.match(/(?:^|\/)thread-(\d+)(?:-[^/?#]+)*\.html(?:[?#]|$)/i);
+      if (seo) {
+        tid = seo[1];
+      } else {
+        try {
+          const parsed = new URL(href, location.href);
+          const mod = parsed.searchParams.get("mod");
+          const queryTid = parsed.searchParams.get("tid");
+          if (/^viewthread$/i.test(mod || "") && /^\d+$/.test(queryTid || "")) {
+            tid = queryTid;
+          }
+        } catch {}
+      }
+
+      if (!tid || seen.has(tid)) continue;
 
       const title = (a.textContent || "").replace(/\s+/g, " ").trim();
       if (!title) continue;
