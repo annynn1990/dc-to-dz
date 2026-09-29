@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 
 const required = ["DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "DISCORD_CHANNEL_ID"];
@@ -80,6 +81,20 @@ const server = createServer(async (req, res) => {
 
   const url = new URL(req.url || "/", "http://localhost");
   console.log(JSON.stringify({ type: "http_request", method: req.method, path: url.pathname, origin }));
+
+  if (req.method === "GET" && url.pathname === "/dz-bridge.js") {
+    try {
+      const script = await readFile(new URL("../dz-bridge.js", import.meta.url), "utf8");
+      res.writeHead(200, {
+        "Content-Type": "application/javascript; charset=utf-8",
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"
+      });
+      return res.end(script);
+    } catch (error) {
+      console.error("Failed to serve browser relay script:", error);
+      return json(res, 500, { ok: false, error: "bridge-script-unavailable" }, origin);
+    }
+  }
 
   if (req.method === "GET" && url.pathname === "/") {
     return json(res, 200, {
