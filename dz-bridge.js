@@ -2,7 +2,7 @@
 (function () {
   "use strict";
 
-  const BRIDGE_VERSION = "2026.09.29.18";
+  const BRIDGE_VERSION = "2026.09.29.19";
   window.__WONGMING_DZ_BRIDGE_RUNTIME__ = BRIDGE_VERSION;
   window.__WONGMING_DZ_BRIDGE_LAST_LOAD__ = Date.now();
 
@@ -11,7 +11,7 @@
   const FORUM_ID = "53";
   const POLL_MS = 5000;
   const SCAN_MS = 15000;
-  const STORAGE_KEY = "wongming_dz_known_threads_v2";
+  const STORAGE_KEY = "wongming_dz_known_threads_v3";
 
   const state = {
     connected: false,
@@ -451,9 +451,10 @@
         // On first bootstrap, preserve the current forum state but also forward
         // the newest visible thread once, so the first fresh scan does not
         // silently discard the latest forum post.
-        const newest = threads
-          .slice()
-          .sort((a, b) => Number(b.tid) - Number(a.tid))[0];
+        // Discuz's forum page is already ordered by the forum's own
+        // newest/relevance rules. Use the first visible topic rather than
+        // comparing tid numbers, which are not chronological across migrations.
+        const newest = threads[0];
 
         threads.forEach(t => known.add(t.tid));
 
@@ -470,7 +471,11 @@
             }
 
             const threadDoc = new DOMParser().parseFromString(threadHtml, "text/html");
-            const post = threadDoc.querySelector(".pcb");
+            const post =
+              threadDoc.querySelector(".pcb") ||
+              threadDoc.querySelector('[id^="postmessage_"]') ||
+              threadDoc.querySelector(".t_f") ||
+              threadDoc.querySelector(".message");
             const content = (post ? post.textContent : "").replace(/\s+/g, " ").trim();
 
             if (!content.includes("[DC->DZ]")) {
