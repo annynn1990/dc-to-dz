@@ -52,7 +52,12 @@ export class DiscuzBridge {
 
   async request(path, options = {}) {
     const headers = new Headers(options.headers || {});
-    headers.set("User-Agent", "dc-to-dz/1.1");
+    headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36");
+    headers.set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+    headers.set("Accept-Language", "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7");
+    headers.set("Cache-Control", "no-cache");
+    headers.set("Pragma", "no-cache");
+    headers.set("Upgrade-Insecure-Requests", "1");
     const cookies = cookieHeader(this.cookies);
     if (cookies) headers.set("Cookie", cookies);
     const response = await fetch(joinUrl(this.baseUrl, path), { ...options, headers, redirect: "manual" });
