@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
 import { Client, GatewayIntentBits, Partials } from "discord.js";
+import Redis from "ioredis";
 
-const required = ["DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "DISCORD_CHANNEL_ID"];
+const required = ["DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "DISCORD_CHANNEL_ID", "REDIS_URL"];
 for (const key of required) {
   if (!process.env[key]) throw new Error("Missing environment variable: " + key);
 }
@@ -11,9 +12,80 @@ const ALLOWED_ORIGINS = new Set([
   "https://wongmingempire.com"
 ]);
 
-const pendingToDiscuz = [];
-const pendingById = new Map();
+const redis = new Redis(process.env.REDIS_URL, {
+  maxRetriesPerRequest: null,
+  enableReadyCheck: true,
+  lazyConnect: true
+});
+
+const QUEUE_KEY = "dc-to-dz:queue";
+const ITEM_PREFIX = "dc-to-dz:item:";
+const CLAIM_PREFIX = "dc-to-dz:claim:";
+const CLAIM_SECONDS = 60;
+
 const deliveredToDiscord = new Set();
+
+function itemKey(id) { return ITEM_PREFIX + id; }
+function claimKey(id) { return CLAIM_PREFIX + id; }
+
+async function enqueueDiscuz(item) {
+  const id = String(item.id || "");
+  if (!id) return false;
+
+  const payload = {
+    id,
+    subject: String(item.subject || "Discord 訊息").slice(0, 80),
+    message: String(item.message || "").slice(0, 12000),
+    author: String(item.author || "Discord"),
+    createdAt: new Date().toISOString()
+  };
+
+  const exists = await redis.exists(itemKey(id));
+  if (exists) return false;
+
+  const tx = redis.multi();
+  tx.set(itemKey(id), JSON.stringify(payload));
+  tx.rpush(QUEUE_KEY, id);
+  await tx.exec();
+  return true;
+}
+
+async function getPendingItems(limit = 5) {
+  const ids = await redis.lrange(QUEUE_KEY, 0, 49);
+  const out = [];
+
+  for (const id of ids) {
+    if (out.length >= limit) break;
+    const claimed = await redis.exists(claimKey(id));
+    if (claimed) continue;
+
+    const raw = await redis.get(itemKey(id));
+    if (!raw) {
+      await redis.lrem(QUEUE_KEY, 0, id);
+      continue;
+    }
+
+    const claimedNow = await redis.set(claimKey(id), "1", "EX", CLAIM_SECONDS, "NX");
+    if (claimedNow === "OK") {
+      out.push(JSON.parse(raw));
+    }
+  }
+
+  return out;
+}
+
+async function acknowledge(id, ok) {
+  const key = itemKey(id);
+  if (ok) {
+    const tx = redis.multi();
+    tx.lrem(QUEUE_KEY, 0, id);
+    tx.del(key);
+    tx.del(claimKey(id));
+    await tx.exec();
+  } else {
+    await redis.del(claimKey(id));
+  }
+}
 
 function json(res, status, body, origin) {
   const headers = {
@@ -44,23 +116,6 @@ function readBody(req) {
   });
 }
 
-function enqueueDiscuz(item) {
-  const id = String(item.id || "");
-  if (!id || pendingById.has(id)) return false;
-
-  const payload = {
-    id,
-    subject: String(item.subject || "Discord 訊息").slice(0, 80),
-    message: String(item.message || "").slice(0, 12000),
-    author: String(item.author || "Discord"),
-    createdAt: new Date().toISOString()
-  };
-
-  pendingById.set(id, payload);
-  pendingToDiscuz.push(payload);
-  return true;
-}
-
 const server = createServer(async (req, res) => {
   const origin = req.headers.origin || "";
 
@@ -82,58 +137,60 @@ const server = createServer(async (req, res) => {
   console.log(JSON.stringify({ type: "http_request", method: req.method, path: url.pathname, origin }));
 
   if (req.method === "GET" && url.pathname === "/") {
+    let pending = 0;
+    try { pending = await redis.llen(QUEUE_KEY); } catch {}
     return json(res, 200, {
       ok: true,
       service: "dc-to-dz",
       mode: "browser-relay",
+      queue: "redis",
       discord: client?.user?.tag || "starting",
-      pendingToDiscuz: pendingToDiscuz.length,
+      pendingToDiscuz: pending,
       time: new Date().toISOString()
     });
   }
 
   if (req.method === "GET" && url.pathname === "/bridge/pending") {
     if (!ALLOWED_ORIGINS.has(origin)) {
-      return json(res, 403, { ok: false, error: "origin-not-allowed" });
+      return json(res, 403, { ok: false, error: "origin-not-allowed" }, origin);
     }
 
-    const now = Date.now();
-    const out = [];
-
-    for (const item of pendingToDiscuz) {
-      if (out.length >= 5) break;
-      if (item.claimedUntil && item.claimedUntil > now) continue;
-
-      item.claimedUntil = now + 60000;
-      out.push(item);
+    try {
+      const out = await getPendingItems(5);
+      console.log(JSON.stringify({ type: "pending_delivered", count: out.length, ids: out.map(x => x.id) }));
+      return json(res, 200, { ok: true, items: out }, origin);
+    } catch (error) {
+      console.error("Queue read failed:", error);
+      return json(res, 503, { ok: false, error: "queue-unavailable" }, origin);
     }
+  }
 
-    return json(res, 200, { ok: true, items: out }, origin);
+  if (req.method === "GET" && url.pathname === "/bridge/ack") {
+    if (!ALLOWED_ORIGINS.has(origin)) {
+      return json(res, 403, { ok: false, error: "origin-not-allowed" }, origin);
+    }
+    const id = String(url.searchParams.get("id") || "");
+    const ok = url.searchParams.get("ok") === "1";
+    try {
+      await acknowledge(id, ok);
+      console.log(JSON.stringify({ type: "relay_ack", id, ok }));
+      return json(res, 200, { ok: true }, origin);
+    } catch (error) {
+      console.error("Queue ack failed:", error);
+      return json(res, 503, { ok: false, error: "queue-unavailable" }, origin);
+    }
   }
 
   if (req.method === "POST" && url.pathname === "/bridge/ack") {
     if (!ALLOWED_ORIGINS.has(origin)) {
-      return json(res, 403, { ok: false, error: "origin-not-allowed" });
+      return json(res, 403, { ok: false, error: "origin-not-allowed" }, origin);
     }
 
     try {
       const body = JSON.parse(await readBody(req));
       const id = String(body.id || "");
-      const ok = body.ok === true;
-      const item = pendingById.get(id);
-
-      if (!item) {
-        return json(res, 200, { ok: true, ignored: true }, origin);
-      }
-
-      if (ok) {
-        pendingById.delete(id);
-        const index = pendingToDiscuz.findIndex(x => x.id === id);
-        if (index >= 0) pendingToDiscuz.splice(index, 1);
-      } else {
-        delete item.claimedUntil;
-      }
-
+      await acknowledge(id, body.ok === true);
+      console.log(JSON.stringify({ type: "relay_ack", id, ok: body.ok === true }));
       return json(res, 200, { ok: true }, origin);
     } catch {
       return json(res, 400, { ok: false, error: "invalid-json" }, origin);
@@ -142,7 +199,7 @@ const server = createServer(async (req, res) => {
 
   if (req.method === "POST" && url.pathname === "/bridge/forum-post") {
     if (!ALLOWED_ORIGINS.has(origin)) {
-      return json(res, 403, { ok: false, error: "origin-not-allowed" });
+      return json(res, 403, { ok: false, error: "origin-not-allowed" }, origin);
     }
 
     try {
@@ -207,12 +264,15 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
+redis.on("ready", () => console.log("Redis queue connected"));
+redis.on("error", error => console.error("Redis queue error:", error?.message || error));
+
 client.once("ready", async () => {
   console.log("Discord bot online as " + client.user.tag);
   console.log("Guild: " + process.env.DISCORD_GUILD_ID);
   console.log("Channel: " + process.env.DISCORD_CHANNEL_ID);
   console.log("Browser relay mode ready");
-
+  await redis.connect();
   await serverReady;
 });
 
@@ -224,28 +284,33 @@ client.on("messageCreate", async message => {
   const content = message.content || "";
   const subjectText = content.replace(/\s+/g, " ").trim().slice(0, 70) || "Discord 訊息";
 
-  enqueueDiscuz({
-    id: message.id,
-    subject: "Discord｜" + message.author.username + "｜" + subjectText,
-    message:
-      "[DC->DZ] Discord 訊息 ID: " + message.id + "\n" +
-      "作者：" + message.author.username + "\n" +
-      "來源：" + message.url + "\n\n" +
-      (content.trim() || "(此訊息沒有文字內容)") +
-      (
-        message.attachments.size
-          ? "\n\n附件:\n" +
-            [...message.attachments.values()].map(a => "- " + a.url).join("\n")
-          : ""
-      ),
-    author: message.author.username
-  });
+  try {
+    const queued = await enqueueDiscuz({
+      id: message.id,
+      subject: "Discord｜" + message.author.username + "｜" + subjectText,
+      message:
+        "[DC->DZ] Discord 訊息 ID: " + message.id + "\n" +
+        "作者：" + message.author.username + "\n" +
+        "來源：" + message.url + "\n\n" +
+        (content.trim() || "(此訊息沒有文字內容)") +
+        (
+          message.attachments.size
+            ? "\n\n附件:\n" +
+              [...message.attachments.values()].map(a => "- " + a.url).join("\n")
+            : ""
+        ),
+      author: message.author.username
+    });
 
-  console.log(JSON.stringify({
-    type: "discord_to_discuz_queued",
-    messageId: message.id,
-    pending: pendingToDiscuz.length
-  }));
+    console.log(JSON.stringify({
+      type: "discord_to_discuz_queued",
+      messageId: message.id,
+      queued
+    }));
+  } catch (error) {
+    console.error("Discord -> Discuz queue failed:", error);
+  }
 });
 
+await redis.connect();
 client.login(process.env.DISCORD_BOT_TOKEN);
