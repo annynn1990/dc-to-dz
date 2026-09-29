@@ -56,6 +56,7 @@
 
   let relayWindow = null;
   let relayWindowReady = false;
+  let relayInFlight = null;
   const RELAY_CLIENT_ID = (() => {
     try {
       const key = "wongming_dz_relay_client_id";
@@ -158,8 +159,6 @@
   }
 
   async function postPendingItem(item) {
-    ensureRelayButton();
-
     if (!relayWindow || relayWindow.closed) {
       throw new Error("請先按「啟用帝國郵政同步」，讓瀏覽器開啟正常發帖視窗");
     }
@@ -173,17 +172,54 @@
     if (!subject || !message) throw new Error("Discuz 發帖欄位結構不同");
 
     subject.value = item.subject;
+    subject.dispatchEvent(new Event("input", {bubbles:true}));
+    subject.dispatchEvent(new Event("change", {bubbles:true}));
+
+    const wysiwyg = form.querySelector('[name="wysiwyg"]');
+    if (wysiwyg) wysiwyg.value = "1";
+
     message.value = item.message;
     message.dispatchEvent(new Event("input", {bubbles:true}));
     message.dispatchEvent(new Event("change", {bubbles:true}));
 
-    const submit = form.querySelector('[type="submit"]');
+    // Discuz may submit editor contents from its iframe/editor rather than
+    // trusting the textarea directly. Mirror the message into common editor frames.
+    try {
+      const frames = Array.from(relayWindow.document.querySelectorAll("iframe"));
+      for (const frame of frames) {
+        try {
+          const body = frame.contentDocument && frame.contentDocument.body;
+          if (!body) continue;
+          const inEditor = frame.id === "e_iframe" ||
+            /editor|message|iframe/i.test(frame.id || "") ||
+            /editor|message/i.test(frame.name || "");
+          if (!inEditor) continue;
+          body.innerHTML = String(item.message)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\r?\n/g, "<br>");
+          body.dispatchEvent(new Event("input", {bubbles:true}));
+          body.dispatchEvent(new Event("change", {bubbles:true}));
+        } catch {}
+      }
+    } catch {}
+
+    const submit = form.querySelector('[name="topicsubmit"]') ||
+      form.querySelector('button[type="submit"]') ||
+      form.querySelector('input[type="submit"]') ||
+      form.querySelector('[type="submit"]');
     if (!submit) throw new Error("找不到發表主題按鈕");
 
     const beforeUrl = relayWindow.location.href;
-    form.requestSubmit(submit);
+    const beforeHtml = relayWindow.document.documentElement
+      ? relayWindow.document.documentElement.outerHTML.slice(0, 200000)
+      : "";
 
-    const deadline = Date.now() + 15000;
+    // Native click runs Discuz's own submit handlers (including editor sync).
+    submit.click();
+
+    const deadline = Date.now() + 30000;
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 500));
 
@@ -227,23 +263,27 @@
   }
 
   async function relayDiscordToDiscuz() {
-    try {
-      const data = await api("/bridge/pending?client=" + encodeURIComponent(RELAY_CLIENT_ID), { method: "GET", headers: {} });
-      state.connected = true;
-      state.pending = data.items ? data.items.length : 0;
+    if (relayInFlight) return relayInFlight;
 
-      for (const item of data.items || []) {
-        try {
-          const url = await postPendingItem(item);
-          const ack = await api("/bridge/ack", {
-            method: "POST",
-            body: JSON.stringify({
-              id: item.id,
-              ok: true,
-              url,
-              stage: "discuz-submit"
-            })
-          });
+    relayInFlight = (async () => {
+      try {
+        const data = await api("/bridge/pending?client=" + encodeURIComponent(RELAY_CLIENT_ID), { method: "GET", headers: {} });
+        state.connected = true;
+        state.pending = data.items ? data.items.length : 0;
+
+        for (const item of data.items || []) {
+          try {
+            const url = await postPendingItem(item);
+            const ack = await api("/bridge/ack", {
+              method: "POST",
+              body: JSON.stringify({
+                id: item.id,
+                clientId: RELAY_CLIENT_ID,
+                ok: true,
+                url,
+                stage: "discuz-submit"
+              })
+            });
           state.lastOutbound = new Date().toISOString();
           state.lastAck = ack.result || null;
           log("Discord → Discuz 成功:", item.id, url, state.lastAck);
@@ -254,6 +294,7 @@
               method: "POST",
               body: JSON.stringify({
                 id: item.id,
+                clientId: RELAY_CLIENT_ID,
                 ok: false,
                 error: String(error && error.message ? error.message : error),
                 stage: "discuz-submit"
@@ -266,10 +307,15 @@
           }
           break;
         }
+        }
+      } catch (error) {
+        setError(error);
+      } finally {
+        relayInFlight = null;
       }
-    } catch (error) {
-      setError(error);
-    }
+    })();
+
+    return relayInFlight;
   }
 
   function loadKnown() {
