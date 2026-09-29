@@ -79,6 +79,7 @@ const server = createServer(async (req, res) => {
   }
 
   const url = new URL(req.url || "/", "http://localhost");
+  console.log(JSON.stringify({ type: "http_request", method: req.method, path: url.pathname, origin }));
 
   if (req.method === "GET" && url.pathname === "/") {
     return json(res, 200, {
