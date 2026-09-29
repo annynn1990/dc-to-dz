@@ -57,6 +57,7 @@
   let relayWindow = null;
   let relayWindowReady = false;
   let relayInFlight = null;
+  let relayEnabled = false;
   const RELAY_CLIENT_ID = (() => {
     try {
       const key = "wongming_dz_relay_client_id";
@@ -77,14 +78,14 @@
     const wrap = document.createElement("div");
     wrap.id = "wongming-dz-relay-button";
     wrap.style.cssText = [
-      "position:fixed","left:14px","top:50%","transform:translateY(-50%)",
+      "position:fixed","left:18px","bottom:18px",
       "z-index:2147483647","max-width:180px","filter:drop-shadow(0 4px 12px rgba(0,0,0,.18))"
     ].join(";");
 
     const button = document.createElement("button");
     button.type = "button";
-    button.setAttribute("aria-label", "啟用帝國郵政同步");
-    button.innerHTML = '<span style="display:block;font-size:12px;opacity:.8;margin-bottom:2px">你好</span><strong style="font-size:16px">請點我</strong>';
+    button.setAttribute("aria-label", "你有一則簡訊");
+    button.innerHTML = '<strong style="font-size:14px">你有一則簡訊</strong>';
     button.style.cssText = [
       "display:block","padding:11px 15px","border:1px solid #c9a227",
       "border-radius:12px","background:linear-gradient(135deg,#fffdf2,#fff3bd)",
@@ -97,6 +98,7 @@
     style.textContent = "@keyframes wongmingDzPulse{0%,100%{transform:translateX(0)}50%{transform:translateX(4px)}}";
 
     button.addEventListener("click", () => {
+      relayEnabled = true;
       try {
         relayWindow = window.open(
           absolute(FORUM_ROOT + "forum.php?mod=post&action=newthread&fid=" + encodeURIComponent(FORUM_ID)),
@@ -110,12 +112,8 @@
           return;
         }
 
-        button.innerHTML = '<span style="display:block;font-size:12px;opacity:.8">謝謝</span><strong style="font-size:14px">同步已啟動</strong>';
-        button.style.animation = "none";
-        setTimeout(() => {
-          wrap.remove();
-          relayDiscordToDiscuz();
-        }, 150);
+        wrap.remove();
+        relayDiscordToDiscuz();
       } catch (error) {
         setError(error);
       }
@@ -263,6 +261,7 @@
   }
 
   async function relayDiscordToDiscuz() {
+    if (!relayEnabled) return;
     if (relayInFlight) return relayInFlight;
 
     relayInFlight = (async () => {
@@ -433,10 +432,10 @@
       setError(error);
     }
 
-    await relayDiscordToDiscuz();
+    ensureRelayButton();
     await scanForum();
 
-    setInterval(relayDiscordToDiscuz, POLL_MS);
+    setInterval(() => { if (relayEnabled) relayDiscordToDiscuz(); }, POLL_MS);
     setInterval(scanForum, SCAN_MS);
 
     window.dispatchEvent(new CustomEvent("wongming-dz-connected"));
