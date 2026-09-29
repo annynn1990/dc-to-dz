@@ -19,13 +19,22 @@ function cookieHeader(jar) {
 
 function extractFormHash(html) {
   const $ = cheerio.load(html);
-  return $('input[name="formhash"]').attr("value") || null;
+  const input = $('input[name="formhash"]').first();
+  return input.attr("value") || input.val() || null;
 }
 
 function extractLoginHash(html) {
   const $ = cheerio.load(html);
-  const id = $('div[id^="main_messaqge_"]').first().attr("id");
-  return id ? id.replace("main_messaqge_", "") : null;
+
+  const formAction = $('form[action*="member.php"][action*="loginsubmit"]').first().attr("action") || "";
+  const actionMatch = formAction.match(/[?&]loginhash=([^&"']+)/);
+  if (actionMatch) return decodeURIComponent(actionMatch[1]);
+
+  const formId = $('form[id^="loginform_"]').first().attr("id") || "";
+  if (formId.startsWith("loginform_")) return formId.replace("loginform_", "");
+
+  const messageId = $('div[id^="main_messaqge_"]').first().attr("id");
+  return messageId ? messageId.replace("main_messaqge_", "") : null;
 }
 
 export class DiscuzBridge {
@@ -53,10 +62,22 @@ export class DiscuzBridge {
 
   async login() {
     const page = await this.request("member.php?mod=logging&action=login");
-    const html = await page.text();
-    const formhash = extractFormHash(html);
-    const loginhash = extractLoginHash(html);
-    if (!formhash) throw new Error("Discuz login formhash not found");
+    let html = await page.text();
+    let formhash = extractFormHash(html);
+    let loginhash = extractLoginHash(html);
+
+    if (!formhash) {
+      const fallbackPage = await this.request("forum.php");
+      const fallbackHtml = await fallbackPage.text();
+      formhash = extractFormHash(fallbackHtml);
+    }
+
+    if (!formhash) {
+      const title = (cheerio.load(html)("title").first().text() || "").trim();
+      const snippet = html.replace(/\s+/g, " ").slice(0, 300);
+      throw new Error("Discuz login formhash not found; HTTP " + page.status +
+        "; title=" + title + "; response=" + snippet);
+    }
 
     const params = new URLSearchParams({
       formhash,
@@ -169,12 +190,13 @@ export class DiscuzBridge {
 
   async start(sendToDiscord) {
     if (this.started) return;
-    this.started = true;
-    await this.ensureLogin();
 
-    const initial = await this.fetchForumThreads();
-    for (const t of initial) this.knownThreads.add(t.tid);
-    console.log("Discuz bridge ready; seeded " + initial.length + " existing page-1 threads.");
+    try {
+      await this.ensureLogin();
+
+      const initial = await this.fetchForumThreads();
+      for (const t of initial) this.knownThreads.add(t.tid);
+      console.log("Discuz bridge ready; seeded " + initial.length + " existing page-1 threads.");
 
     const poll = async () => {
       try {
@@ -201,6 +223,11 @@ export class DiscuzBridge {
     };
 
     setInterval(poll, this.pollMs);
+      this.started = true;
+    } catch (error) {
+      this.started = false;
+      throw error;
+    }
   }
 
   async discordToDiscuz({ messageId, author, content, attachments, url }) {
