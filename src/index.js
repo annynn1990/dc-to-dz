@@ -164,6 +164,45 @@ async function sendToDiscord(payload) {
   await channel.send(payload);
 }
 
+async function probeDiscuzMobileApi() {
+  const base = String(process.env.DZ_BASE_URL || "").replace(/\\/$/, "");
+  const endpoints = [
+    "/api/mobile/index.php",
+    "/api/mobile/index.php?module=forumindex",
+    "/api/mobile/index.php?module=login"
+  ];
+
+  console.log("Probing existing Discuz Mobile API without changing forum files...");
+  for (const path of endpoints) {
+    try {
+      const response = await fetch(base + path, {
+        method: "GET",
+        redirect: "manual",
+        headers: {
+          "User-Agent": "WongMing-DC-DZ-Bridge/1.0",
+          "Accept": "application/json,text/plain,*/*"
+        }
+      });
+      const location = response.headers.get("location") || "";
+      const text = (await response.text()).slice(0, 180).replace(/\\s+/g, " ");
+      console.log(JSON.stringify({
+        type: "discuz_mobile_api_probe",
+        path,
+        status: response.status,
+        contentType: response.headers.get("content-type") || "",
+        location,
+        sample: text
+      }));
+    } catch (error) {
+      console.error(JSON.stringify({
+        type: "discuz_mobile_api_probe_failed",
+        path,
+        error: String(error?.message || error)
+      }));
+    }
+  }
+}
+
 async function startDiscuz() {
   if (discuzStarted) return;
 
@@ -235,6 +274,7 @@ client.once("ready", async () => {
   console.log("Channel: " + process.env.DISCORD_CHANNEL_ID);
   await serverReady;
 
+  await probeDiscuzMobileApi();
   await startDiscuz();
   await processQueue();
   setInterval(processQueue, QUEUE_POLL_MS);
