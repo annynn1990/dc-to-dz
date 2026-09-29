@@ -271,41 +271,12 @@ client.once("ready", async () => {
   console.log("Discord bot online as " + client.user.tag);
   console.log("Guild: " + process.env.DISCORD_GUILD_ID);
   console.log("Channel: " + process.env.DISCORD_CHANNEL_ID);
-  console.log("Browser relay mode ready");
+  console.log("Discord → Discuz disabled; Discuz → Discord reverse relay active");
 
   await serverReady;
 });
 
 client.on("messageCreate", async message => {
-  if (message.author.bot) return;
-  if (message.guildId !== process.env.DISCORD_GUILD_ID) return;
-  if (message.channelId !== process.env.DISCORD_CHANNEL_ID) return;
-
-  const content = message.content || "";
-  const subjectText = content.replace(/\s+/g, " ").trim().slice(0, 70) || "Discord 訊息";
-
-  enqueueDiscuz({
-    id: message.id,
-    subject: "Discord｜" + message.author.username + "｜" + subjectText,
-    message:
-      "[DC->DZ] Discord 訊息 ID: " + message.id + "\n" +
-      "作者：" + message.author.username + "\n" +
-      "來源：" + message.url + "\n\n" +
-      (content.trim() || "(此訊息沒有文字內容)") +
-      (
-        message.attachments.size
-          ? "\n\n附件:\n" +
-            [...message.attachments.values()].map(a => "- " + a.url).join("\n")
-          : ""
-      ),
-    author: message.author.username
-  });
-
-  console.log(JSON.stringify({
-    type: "discord_to_discuz_queued",
-    messageId: message.id,
-    pending: pendingToDiscuz.length
-  }));
+  // Discord → Discuz is intentionally disabled.
+  // Do not queue Discord messages for the browser relay.
 });
-
-client.login(process.env.DISCORD_BOT_TOKEN);
