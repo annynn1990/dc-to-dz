@@ -59,31 +59,54 @@
 
   function ensureRelayButton() {
     if (document.getElementById("wongming-dz-relay-button")) return;
-    const button = document.createElement("button");
-    button.id = "wongming-dz-relay-button";
-    button.type = "button";
-    button.textContent = "啟用帝國郵政同步";
-    button.style.cssText = [
-      "position:fixed","right:16px","bottom:16px","z-index:2147483647",
-      "padding:9px 14px","border:1px solid #c9a227","border-radius:8px",
-      "background:#fff9df","color:#6b4f00","font:14px sans-serif","cursor:pointer",
-      "box-shadow:0 2px 8px rgba(0,0,0,.15)"
+
+    const wrap = document.createElement("div");
+    wrap.id = "wongming-dz-relay-button";
+    wrap.style.cssText = [
+      "position:fixed","left:14px","top:50%","transform:translateY(-50%)",
+      "z-index:2147483647","max-width:180px","filter:drop-shadow(0 4px 12px rgba(0,0,0,.18))"
     ].join(";");
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("aria-label", "啟用帝國郵政同步");
+    button.innerHTML = '<span style="display:block;font-size:12px;opacity:.8;margin-bottom:2px">你好</span><strong style="font-size:16px">請點我</strong>';
+    button.style.cssText = [
+      "display:block","padding:11px 15px","border:1px solid #c9a227",
+      "border-radius:12px","background:linear-gradient(135deg,#fffdf2,#fff3bd)",
+      "color:#6b4f00","font:14px/1.2 sans-serif","cursor:pointer",
+      "text-align:center","animation:wongmingDzPulse 2s ease-in-out infinite",
+      "box-shadow:0 4px 14px rgba(107,79,0,.18)"
+    ].join(";");
+
+    const style = document.createElement("style");
+    style.textContent = "@keyframes wongmingDzPulse{0%,100%{transform:translateX(0)}50%{transform:translateX(4px)}}";
+
     button.addEventListener("click", () => {
-      relayWindow = window.open(
-        absolute(FORUM_ROOT + "forum.php?mod=post&action=newthread&fid=" + encodeURIComponent(FORUM_ID)),
-        "WongMingDZRelay",
-        "width=900,height=700,left=20,top=20"
-      );
-      relayWindowReady = !!relayWindow;
-      if (!relayWindow) {
-        button.textContent = "瀏覽器阻擋視窗，請再點一次";
-        return;
+      try {
+        relayWindow = window.open(
+          absolute(FORUM_ROOT + "forum.php?mod=post&action=newthread&fid=" + encodeURIComponent(FORUM_ID)),
+          "WongMingDZRelay",
+          "width=900,height=700,left=20,top=20"
+        );
+        relayWindowReady = !!relayWindow;
+
+        if (!relayWindow) {
+          button.innerHTML = '<span style="display:block;font-size:12px">瀏覽器阻擋視窗</span><strong style="font-size:14px">再點一次</strong>';
+          return;
+        }
+
+        button.innerHTML = '<span style="display:block;font-size:12px;opacity:.8">謝謝</span><strong style="font-size:14px">同步已啟動</strong>';
+        button.style.animation = "none";
+        setTimeout(() => wrap.remove(), 1800);
+      } catch (error) {
+        setError(error);
       }
-      button.textContent = "同步視窗已開啟";
-      setTimeout(() => button.remove(), 3000);
     });
-    document.body.appendChild(button);
+
+    wrap.appendChild(style);
+    wrap.appendChild(button);
+    document.body.appendChild(wrap);
   }
 
   async function waitForRelayWindow() {
