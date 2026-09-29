@@ -97,14 +97,17 @@ const server = createServer(async (req, res) => {
       return json(res, 403, { ok: false, error: "origin-not-allowed" });
     }
 
+    const clientId = String(url.searchParams.get("client") || "");
     const now = Date.now();
     const out = [];
 
     for (const item of pendingToDiscuz) {
       if (out.length >= 5) break;
-      if (item.claimedUntil && item.claimedUntil > now) continue;
+      const claimedByOther = item.claimedUntil && item.claimedUntil > now && item.claimedBy && item.claimedBy !== clientId;
+      if (claimedByOther) continue;
 
       item.claimedUntil = now + 60000;
+      item.claimedBy = clientId || "";
       out.push(item);
     }
 
@@ -119,6 +122,7 @@ const server = createServer(async (req, res) => {
     try {
       const body = JSON.parse(await readBody(req));
       const id = String(body.id || "");
+      const clientId = String(body.clientId || "");
       const relayOk = body.ok === true;
       const item = pendingById.get(id);
       const result = {
@@ -145,13 +149,15 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { ok: true, ignored: true, result }, origin);
       }
 
+      if (item.claimedBy && clientId && item.claimedBy !== clientId) {
+        return json(res, 409, { ok: false, error: "claim-owner-mismatch", result }, origin);
+      }
+
       if (relayOk) {
         pendingById.delete(id);
         const index = pendingToDiscuz.findIndex(x => x.id === id);
         if (index >= 0) pendingToDiscuz.splice(index, 1);
       } else {
-        // Keep a failed item claimed for a cooldown period so multiple forum
-        // visitors cannot hammer Render/Cloudflare with the same retry.
         item.claimedUntil = Date.now() + 120000;
         item.lastFailureAt = Date.now();
       }
