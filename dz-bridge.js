@@ -124,6 +124,17 @@
     document.body.appendChild(wrap);
   }
 
+  async function checkPendingNotification() {
+    if (relayEnabled || document.getElementById("wongming-dz-relay-button")) return;
+    try {
+      const data = await api("/", { method: "GET", headers: {} });
+      state.pending = Number(data.pendingToDiscuz || 0);
+      if (state.pending > 0) ensureRelayButton();
+    } catch (error) {
+      setError(error);
+    }
+  }
+
   async function waitForRelayWindow() {
     const deadline = Date.now() + 60000;
     while (Date.now() < deadline) {
@@ -208,6 +219,18 @@
       form.querySelector('input[type="submit"]') ||
       form.querySelector('[type="submit"]');
     if (!submit) throw new Error("找不到發表主題按鈕");
+
+    // Discuz's server-side submitcheck() expects the submit control's
+    // topicsubmit value. Native form.submit() does not include a submit
+    // button's name/value, so explicitly add it.
+    let topicSubmit = form.querySelector('input[name="topicsubmit"]');
+    if (!topicSubmit) {
+      topicSubmit = relayWindow.document.createElement("input");
+      topicSubmit.type = "hidden";
+      topicSubmit.name = "topicsubmit";
+      form.appendChild(topicSubmit);
+    }
+    topicSubmit.value = "yes";
 
     // Submit the actual HTML form directly. This avoids depending on
     // Discuz's WYSIWYG iframe JavaScript and sends the textarea value.
@@ -429,10 +452,16 @@
       setError(error);
     }
 
-    ensureRelayButton();
+    await checkPendingNotification();
     await scanForum();
 
-    setInterval(() => { if (relayEnabled) relayDiscordToDiscuz(); }, POLL_MS);
+    setInterval(() => {
+      if (relayEnabled) {
+        relayDiscordToDiscuz();
+      } else {
+        checkPendingNotification();
+      }
+    }, POLL_MS);
     setInterval(scanForum, SCAN_MS);
 
     window.dispatchEvent(new CustomEvent("wongming-dz-connected"));
