@@ -35,51 +35,13 @@
     console.error("[WongMing DZ]", state.lastError);
   }
 
-  function showChallengeNotice(url) {
+  function showChallengeNotice() {
     state.cloudflareBlocked = true;
     challengeBlockedUntil = Date.now() + CHALLENGE_COOLDOWN_MS;
-
-    if (document.getElementById("wongming-dz-cf-notice")) return;
-
-    const box = document.createElement("div");
-    box.id = "wongming-dz-cf-notice";
-    box.style.cssText = [
-      "position:fixed",
-      "right:18px",
-      "bottom:18px",
-      "z-index:2147483647",
-      "width:min(420px,calc(100vw - 36px))",
-      "padding:16px 18px",
-      "border-radius:12px",
-      "background:#fff",
-      "border:1px solid #d7d7d7",
-      "box-shadow:0 10px 35px rgba(0,0,0,.18)",
-      "font:14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
-      "color:#222"
-    ].join(";");
-
-    box.innerHTML =
-      '<div style="font-weight:700;margin-bottom:6px">黃名帝國 Discord → Discuz 同步</div>' +
-      '<div style="margin-bottom:10px">Discuz 的發帖網址目前要求瀏覽器完成一次 Cloudflare 驗證。請在正常分頁完成驗證，完成後回到論壇首頁即可自動繼續同步。</div>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-        '<button id="wongming-dz-cf-open" type="button" style="border:0;border-radius:8px;padding:8px 12px;cursor:pointer;font-weight:600">開啟發帖頁驗證</button>' +
-        '<button id="wongming-dz-cf-close" type="button" style="border:1px solid #ccc;background:#fff;border-radius:8px;padding:8px 12px;cursor:pointer">關閉提示</button>' +
-      '</div>';
-
-    document.body.appendChild(box);
-
-    box.querySelector("#wongming-dz-cf-open").addEventListener("click", function () {
-      window.open(url, "_blank", "noopener");
-    });
-    box.querySelector("#wongming-dz-cf-close").addEventListener("click", function () {
-      box.remove();
-    });
   }
 
   function clearChallengeNotice() {
     state.cloudflareBlocked = false;
-    const box = document.getElementById("wongming-dz-cf-notice");
-    if (box) box.remove();
   }
 
   async function api(path, options) {
@@ -125,7 +87,7 @@
       const html = doc.documentElement ? doc.documentElement.outerHTML : "";
 
       if (/請稍候|just a moment|checking your browser|verify you are human/i.test(html)) {
-        showChallengeNotice(url);
+        showChallengeNotice();
         throw new Error("Discuz 發帖頁仍是 Cloudflare 驗證頁");
       }
 
@@ -161,7 +123,7 @@
         throw new Error("Discuz 拒絕發帖：登入狀態或權限有問題");
       }
       if (/請稍候|just a moment|checking your browser|verify you are human/i.test(resultHtml)) {
-        showChallengeNotice(url);
+        showChallengeNotice();
         throw new Error("Discuz 發帖回應仍是 Cloudflare 驗證頁");
       }
       if (/thread-\d+/i.test(resultUrl) || /發表成功|發帖成功|主題已發布|succeedhandle/i.test(resultText + resultHtml)) {
