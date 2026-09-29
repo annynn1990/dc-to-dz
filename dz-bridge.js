@@ -2,8 +2,9 @@
 (function () {
   "use strict";
 
-  if (window.__WONGMING_DZ_BRIDGE_RUNTIME__) return;
-  window.__WONGMING_DZ_BRIDGE_RUNTIME__ = true;
+  const BRIDGE_VERSION = "2026.09.29.16";
+  window.__WONGMING_DZ_BRIDGE_RUNTIME__ = BRIDGE_VERSION;
+  window.__WONGMING_DZ_BRIDGE_LAST_LOAD__ = Date.now();
 
   const API = "https://dc-to-dz.onrender.com";
   const FORUM_ROOT = "/bbswm/";
@@ -77,6 +78,7 @@
 
     const wrap = document.createElement("div");
     wrap.id = "wongming-dz-relay-button";
+    wrap.dataset.wongmingBridgeVersion = BRIDGE_VERSION;
     wrap.setAttribute("style", [
       "position:fixed !important",
       "left:18px !important",
@@ -131,10 +133,13 @@
 
     wrap.appendChild(button);
 
+    const oldNotice = document.getElementById("wongming-dz-relay-button");
+    if (oldNotice) oldNotice.remove();
+
     const parent = document.body || document.documentElement;
     if (parent) {
       parent.appendChild(wrap);
-      log("通知已顯示，pending:", state.pending);
+      log("WongMing DZ Bridge", BRIDGE_VERSION, "通知已顯示，pending:", state.pending);
     }
   }
 
