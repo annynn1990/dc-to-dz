@@ -74,7 +74,8 @@
   })();
 
   function ensureRelayButton() {
-    if (document.getElementById("wongming-dz-relay-button")) return;
+    const existing = document.getElementById("wongming-dz-relay-button");
+    if (existing) existing.remove();
 
     const wrap = document.createElement("div");
     wrap.id = "wongming-dz-relay-button";
@@ -145,11 +146,15 @@
 
 
   async function checkPendingNotification() {
-    if (relayEnabled || document.getElementById("wongming-dz-relay-button")) return;
+    if (relayEnabled) return;
     try {
       const data = await api("/", { method: "GET", headers: {} });
       state.pending = Number(data.pendingToDiscuz || 0);
       if (state.pending > 0) ensureRelayButton();
+      else {
+        const notice = document.getElementById("wongming-dz-relay-button");
+        if (notice) notice.remove();
+      }
     } catch (error) {
       setError(error);
     }
