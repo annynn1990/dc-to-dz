@@ -165,7 +165,7 @@ async function sendToDiscord(payload) {
 }
 
 async function probeDiscuzMobileApi() {
-  const base = String(process.env.DZ_BASE_URL || "").replace(/\\/$/, "");
+  const base = String(process.env.DZ_BASE_URL || "").replace(/\/$/, "");
   const endpoints = [
     "/api/mobile/index.php",
     "/api/mobile/index.php?module=forumindex",
