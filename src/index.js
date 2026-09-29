@@ -150,7 +150,10 @@ const server = createServer(async (req, res) => {
         const index = pendingToDiscuz.findIndex(x => x.id === id);
         if (index >= 0) pendingToDiscuz.splice(index, 1);
       } else {
-        delete item.claimedUntil;
+        // Keep a failed item claimed for a cooldown period so multiple forum
+        // visitors cannot hammer Render/Cloudflare with the same retry.
+        item.claimedUntil = Date.now() + 120000;
+        item.lastFailureAt = Date.now();
       }
 
       return json(res, 200, { ok: true, result }, origin);
