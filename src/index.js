@@ -272,7 +272,6 @@ client.once("ready", async () => {
   console.log("Guild: " + process.env.DISCORD_GUILD_ID);
   console.log("Channel: " + process.env.DISCORD_CHANNEL_ID);
   console.log("Browser relay mode ready");
-  await redis.connect();
   await serverReady;
 });
 
