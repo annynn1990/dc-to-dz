@@ -56,6 +56,19 @@
 
   let relayWindow = null;
   let relayWindowReady = false;
+  const RELAY_CLIENT_ID = (() => {
+    try {
+      const key = "wongming_dz_relay_client_id";
+      let id = sessionStorage.getItem(key);
+      if (!id) {
+        id = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ("wm-" + Date.now() + "-" + Math.random().toString(36).slice(2));
+        sessionStorage.setItem(key, id);
+      }
+      return id;
+    } catch {
+      return "wm-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+    }
+  })();
 
   function ensureRelayButton() {
     if (document.getElementById("wongming-dz-relay-button")) return;
@@ -98,7 +111,10 @@
 
         button.innerHTML = '<span style="display:block;font-size:12px;opacity:.8">謝謝</span><strong style="font-size:14px">同步已啟動</strong>';
         button.style.animation = "none";
-        setTimeout(() => wrap.remove(), 1800);
+        setTimeout(() => {
+          wrap.remove();
+          relayDiscordToDiscuz();
+        }, 150);
       } catch (error) {
         setError(error);
       }
@@ -212,7 +228,7 @@
 
   async function relayDiscordToDiscuz() {
     try {
-      const data = await api("/bridge/pending", { method: "GET", headers: {} });
+      const data = await api("/bridge/pending?client=" + encodeURIComponent(RELAY_CLIENT_ID), { method: "GET", headers: {} });
       state.connected = true;
       state.pending = data.items ? data.items.length : 0;
 
