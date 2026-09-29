@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "npx playwright install chromium && node src/index.js",
     "postinstall": "npx playwright install chromium"
   },
   "dependencies": {
