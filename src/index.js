@@ -226,7 +226,7 @@ const server = createServer(async (req, res) => {
       }
 
       const message =
-        "**DZ → Discord**\n" +
+        "**有一則來自首都延興廣場的主題**\n" +
         "**" + title.replace(/\*/g, "") + "**\n" +
         (content || "(無內容)") +
         (threadUrl ? "\n<" + threadUrl + ">" : "");
