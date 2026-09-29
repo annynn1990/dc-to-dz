@@ -70,7 +70,7 @@ export class DiscuzBridge {
     // First let a real Chromium page execute Cloudflare's browser-side checks.
     // We do not solve CAPTCHAs or defeat access controls; if a human challenge
     // remains, startup stops and reports it.
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ headless: true, executablePath: "/opt/render/project/src/node_modules/playwright-core/.local-browsers/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell" });
     try {
       const context = await browser.newContext({
         locale: "zh-TW",
