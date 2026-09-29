@@ -133,6 +133,19 @@
         } catch (error) {
           setError(error);
           try {
+            await api("/bridge/client-error", {
+              method: "POST",
+              body: JSON.stringify({
+                id: item.id,
+                stage: "postPendingItem",
+                error: String(error && error.message || error),
+                url: location.href,
+                title: document.title,
+                details: { stack: String(error && error.stack || "") }
+              })
+            });
+          } catch {}
+          try {
             await api("/bridge/ack", {
               method: "POST",
               body: JSON.stringify({ id: item.id, ok: false })
