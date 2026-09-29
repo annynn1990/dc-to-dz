@@ -420,6 +420,19 @@
       const threads = parseThreads(html);
       const known = loadKnown();
 
+      try {
+        await api("/bridge/scan-status", {
+          method: "POST",
+          body: JSON.stringify({
+            forumId: FORUM_ID,
+            url,
+            threadCount: threads.length,
+            threadIds: threads.slice(0, 20).map(t => t.tid),
+            lastKnownCount: known.size
+          })
+        });
+      } catch {}
+
       if (known.size === 0) {
         threads.forEach(t => known.add(t.tid));
         saveKnown(known);
