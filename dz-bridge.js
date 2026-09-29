@@ -2,15 +2,15 @@
 (function () {
   "use strict";
 
-  const BRIDGE_VERSION = "2026.09.29.19";
+  const BRIDGE_VERSION = "2026.09.29.20";
   window.__WONGMING_DZ_BRIDGE_RUNTIME__ = BRIDGE_VERSION;
   window.__WONGMING_DZ_BRIDGE_LAST_LOAD__ = Date.now();
 
   const API = "https://dc-to-dz.onrender.com";
   const FORUM_ROOT = "/bbswm/";
   const FORUM_ID = "53";
-  const POLL_MS = 5000;
-  const SCAN_MS = 15000;
+  const POLL_MS = 10000;
+  const SCAN_MS = 30000;
   const STORAGE_KEY = "wongming_dz_known_threads_v3";
 
   const state = {
@@ -18,7 +18,9 @@
     lastOutbound: null,
     lastScan: null,
     lastError: null,
-    pending: 0
+    pending: 0,
+    scanInFlight: false,
+    pollInFlight: false
   };
 
   window.WongMingDZBridge = state;
@@ -146,7 +148,8 @@
 
 
   async function checkPendingNotification() {
-    if (relayEnabled) return;
+    if (relayEnabled || state.pollInFlight) return;
+    state.pollInFlight = true;
     try {
       const data = await api("/", { method: "GET", headers: {} });
       state.pending = Number(data.pendingToDiscuz || 0);
@@ -157,6 +160,8 @@
       }
     } catch (error) {
       setError(error);
+    } finally {
+      state.pollInFlight = false;
     }
   }
 
@@ -419,6 +424,9 @@
   }
 
   async function scanForum() {
+    if (state.scanInFlight) return;
+    state.scanInFlight = true;
+
     try {
       const url = absolute(FORUM_ROOT + "forum.php?mod=forumdisplay&fid=" + FORUM_ID);
       const response = await fetch(url, {
@@ -538,6 +546,8 @@
       state.connected = true;
     } catch (error) {
       setError(error);
+    } finally {
+      state.scanInFlight = false;
     }
   }
 
