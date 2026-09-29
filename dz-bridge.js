@@ -2,7 +2,7 @@
 (function () {
   "use strict";
 
-  const BRIDGE_VERSION = "2026.09.29.17";
+  const BRIDGE_VERSION = "2026.09.29.18";
   window.__WONGMING_DZ_BRIDGE_RUNTIME__ = BRIDGE_VERSION;
   window.__WONGMING_DZ_BRIDGE_LAST_LOAD__ = Date.now();
 
@@ -11,7 +11,7 @@
   const FORUM_ID = "53";
   const POLL_MS = 5000;
   const SCAN_MS = 15000;
-  const STORAGE_KEY = "wongming_dz_known_threads_v1";
+  const STORAGE_KEY = "wongming_dz_known_threads_v2";
 
   const state = {
     connected: false,
@@ -448,7 +448,48 @@
       } catch {}
 
       if (known.size === 0) {
+        // On first bootstrap, preserve the current forum state but also forward
+        // the newest visible thread once, so the first fresh scan does not
+        // silently discard the latest forum post.
+        const newest = threads
+          .slice()
+          .sort((a, b) => Number(b.tid) - Number(a.tid))[0];
+
         threads.forEach(t => known.add(t.tid));
+
+        if (newest) {
+          try {
+            const threadResponse = await fetch(newest.url, {
+              credentials: "same-origin",
+              cache: "no-store"
+            });
+            const threadHtml = await threadResponse.text();
+
+            if (/請稍候|just a moment|checking your browser|verify you are human/i.test(threadHtml)) {
+              throw new Error("主題頁被 Cloudflare Challenge");
+            }
+
+            const threadDoc = new DOMParser().parseFromString(threadHtml, "text/html");
+            const post = threadDoc.querySelector(".pcb");
+            const content = (post ? post.textContent : "").replace(/\s+/g, " ").trim();
+
+            if (!content.includes("[DC->DZ]")) {
+              await api("/bridge/forum-post", {
+                method: "POST",
+                body: JSON.stringify({
+                  tid: newest.tid,
+                  title: newest.title,
+                  content: content.slice(0, 6000),
+                  url: newest.url
+                })
+              });
+              log("Discuz → Discord 首次同步最新文章:", newest.tid, newest.title);
+            }
+          } catch (error) {
+            setError(error);
+          }
+        }
+
         saveKnown(known);
         state.lastScan = new Date().toISOString();
         return;
