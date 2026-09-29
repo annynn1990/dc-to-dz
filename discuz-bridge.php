@@ -19,6 +19,8 @@ require DISCUZ_ROOT . 'source/class/class_core.php';
 require_once DISCUZ_ROOT . 'source/function/function_member.php';
 
 const BRIDGE_SECRET = 'REPLACE_WITH_A_LONG_RANDOM_SECRET';
+const BRIDGE_USERNAME = 'REPLACE_WITH_DISCUZ_SERVICE_USERNAME';
+const BRIDGE_FID = 53;
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
@@ -48,10 +50,10 @@ function bridge_input() {
     return $data;
 }
 
-function bridge_login_service_account($username) {
+function bridge_login_service_account() {
     global $_G;
 
-    $member = C::t('common_member')->fetch_by_username($username);
+    $member = C::t('common_member')->fetch_by_username(BRIDGE_USERNAME);
     if (!$member || empty($member['uid'])) {
         bridge_json(500, array('ok' => false, 'error' => 'service-account-not-found'));
     }
@@ -74,6 +76,7 @@ function bridge_model_error_handler($message) {
 }
 
 function bridge_thread_url($tid) {
+    global $_G;
     return rtrim($_G['siteurl'], '/') . '/forum.php?mod=viewthread&tid=' . intval($tid);
 }
 
@@ -81,16 +84,11 @@ bridge_auth();
 
 $input = bridge_input();
 $action = isset($input['action']) ? (string)$input['action'] : '';
-$fid = isset($input['fid']) ? intval($input['fid']) : 0;
-$serviceUsername = isset($input['service_username']) ? trim((string)$input['service_username']) : '';
-
-if ($serviceUsername === '') {
-    bridge_json(400, array('ok' => false, 'error' => 'missing-service-username'));
-}
+$fid = isset($input['fid']) ? intval($input['fid']) : BRIDGE_FID;
 
 $discuz = C::app();
 $discuz->init();
-$member = bridge_login_service_account($serviceUsername);
+$member = bridge_login_service_account();
 
 try {
     if ($action === 'ping') {
@@ -109,8 +107,8 @@ try {
     }
 
     if ($action === 'newthread') {
-        if ($fid <= 0) {
-            bridge_json(400, array('ok' => false, 'error' => 'missing-fid'));
+        if ($fid !== BRIDGE_FID) {
+            bridge_json(403, array('ok' => false, 'error' => 'forum-not-allowed'));
         }
 
         $subject = trim((string)($input['subject'] ?? 'Discord 同步'));
@@ -232,8 +230,8 @@ try {
     }
 
     if ($action === 'recent') {
-        if ($fid <= 0) {
-            bridge_json(400, array('ok' => false, 'error' => 'missing-fid'));
+        if ($fid !== BRIDGE_FID) {
+            bridge_json(403, array('ok' => false, 'error' => 'forum-not-allowed'));
         }
 
         $since = isset($input['since']) ? intval($input['since']) : (TIMESTAMP - 60);
