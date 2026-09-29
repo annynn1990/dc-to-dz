@@ -477,9 +477,8 @@
       setError(error);
     }
 
-    await checkPendingNotification();
-    await scanForum();
-
+    // Start polling immediately. Forum scanning must never block the
+    // Discord->Discuz notification loop.
     setInterval(() => {
       if (relayEnabled) {
         relayDiscordToDiscuz();
@@ -487,7 +486,11 @@
         checkPendingNotification();
       }
     }, POLL_MS);
+
     setInterval(scanForum, SCAN_MS);
+
+    checkPendingNotification();
+    scanForum();
 
     window.dispatchEvent(new CustomEvent("wongming-dz-connected"));
   }
