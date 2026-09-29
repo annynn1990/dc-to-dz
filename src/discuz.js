@@ -1,4 +1,5 @@
 import * as cheerio from "cheerio";
+import { chromium } from "playwright";
 
 function joinUrl(base, path) {
   return new URL(path, base).toString();
@@ -66,49 +67,76 @@ export class DiscuzBridge {
   }
 
   async login() {
-    const page = await this.request("member.php?mod=logging&action=login");
-    let html = await page.text();
-    let formhash = extractFormHash(html);
-    let loginhash = extractLoginHash(html);
+    // First let a real Chromium page execute Cloudflare's browser-side checks.
+    // We do not solve CAPTCHAs or defeat access controls; if a human challenge
+    // remains, startup stops and reports it.
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const context = await browser.newContext({
+        locale: "zh-TW",
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+      });
+      const page = await context.newPage();
+      const loginUrl = joinUrl(this.baseUrl, "member.php?mod=logging&action=login");
+      await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await page.waitForTimeout(8000);
 
-    if (!formhash) {
-      const fallbackPage = await this.request("forum.php");
-      const fallbackHtml = await fallbackPage.text();
-      formhash = extractFormHash(fallbackHtml);
+      for (let i = 0; i < 3 && /just a moment|checking your browser|verify you are human/i.test(await page.title()); i++) {
+        await page.waitForTimeout(7000);
+      }
+
+      const html = await page.content();
+      const title = (await page.title()).trim();
+      if (/just a moment|checking your browser|verify you are human/i.test(title)) {
+        throw new Error("Cloudflare browser challenge did not clear automatically; manual verification is required.");
+      }
+
+      for (const cookie of await context.cookies()) {
+        this.cookies.set(cookie.name, cookie.value);
+      }
+
+      let formhash = extractFormHash(html);
+      let loginhash = extractLoginHash(html);
+
+      if (!formhash) {
+        const fallback = await page.goto(joinUrl(this.baseUrl, "forum.php"), { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.waitForTimeout(2000);
+        const fallbackHtml = await page.content();
+        formhash = extractFormHash(fallbackHtml);
+      }
+
+      if (!formhash) {
+        throw new Error("Discuz login formhash not found after browser challenge; title=" + title);
+      }
+
+      const params = new URLSearchParams({
+        formhash,
+        referer: loginUrl,
+        loginfield: "username",
+        username: this.username,
+        password: this.password,
+        questionid: "0",
+        answer: "",
+        cookietime: "2592000"
+      });
+
+      const path = "member.php?mod=logging&action=login&loginsubmit=yes&handlekey=login&loginhash=" +
+        encodeURIComponent(loginhash || "") + "&inajax=1";
+      const response = await this.request(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params
+      });
+      const result = await response.text();
+
+      if (!/succeed|登錄成功|登入成功/.test(result)) {
+        throw new Error("Discuz login failed after browser verification; check credentials or forum security verification.");
+      }
+      this.loggedIn = true;
+      console.log("Discuz login OK via Chromium session");
+    } finally {
+      await browser.close();
     }
-
-    if (!formhash) {
-      const title = (cheerio.load(html)("title").first().text() || "").trim();
-      const snippet = html.replace(/\s+/g, " ").slice(0, 300);
-      throw new Error("Discuz login formhash not found; HTTP " + page.status +
-        "; title=" + title + "; response=" + snippet);
-    }
-
-    const params = new URLSearchParams({
-      formhash,
-      referer: this.baseUrl,
-      loginfield: "username",
-      username: this.username,
-      password: this.password,
-      questionid: "0",
-      answer: "",
-      cookietime: "2592000"
-    });
-
-    const path = "member.php?mod=logging&action=login&loginsubmit=yes&handlekey=login&loginhash=" +
-      encodeURIComponent(loginhash || "") + "&inajax=1";
-    const response = await this.request(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: params
-    });
-    const result = await response.text();
-
-    if (!/succeed|登錄成功|登入成功/.test(result)) {
-      throw new Error("Discuz login failed; check credentials or forum security verification.");
-    }
-    this.loggedIn = true;
-    console.log("Discuz login OK");
   }
 
   async ensureLogin() {
