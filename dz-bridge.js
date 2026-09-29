@@ -56,30 +56,36 @@
 
   async function postPendingItem(item) {
     const url = absolute(FORUM_ROOT + "forum.php?mod=post&action=newthread&fid=" + encodeURIComponent(FORUM_ID));
-    const frame = document.createElement("iframe");
-    frame.style.cssText = "position:fixed;width:2px;height:2px;left:-9999px;top:-9999px;border:0;";
-    document.body.appendChild(frame);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
 
     try {
-      await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("Discuz 發帖頁載入逾時")), 20000);
-        frame.onload = () => { clearTimeout(timer); resolve(); };
-        frame.onerror = () => { clearTimeout(timer); reject(new Error("Discuz 發帖頁載入失敗")); };
-        frame.src = url;
+      const response = await fetch(url, {
+        method: "GET",
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+        headers: {
+          "Accept": "text/html"
+        }
       });
 
-      const doc = frame.contentDocument;
-      if (!doc) throw new Error("無法取得 Discuz 發帖頁");
-      const bodyText = doc.body ? doc.body.textContent || "" : "";
-      const html = doc.documentElement ? doc.documentElement.outerHTML : "";
+      const html = await response.text();
+
+      if (!response.ok) {
+        throw new Error("Discuz 發帖頁 HTTP " + response.status);
+      }
 
       if (/請稍候|just a moment|checking your browser|verify you are human/i.test(html)) {
         throw new Error("Discuz 發帖頁仍是 Cloudflare 驗證頁");
       }
 
+      const doc = new DOMParser().parseFromString(html, "text/html");
       const form = doc.querySelector("form#postform") ||
         doc.querySelector('form[action*="forum.php"][action*="post"]');
       if (!form) throw new Error("找不到 Discuz 發帖表單");
+
       const hash = form.querySelector('[name="formhash"]');
       if (!hash || !hash.value) throw new Error("找不到 formhash，請確認帝國郵政仍登入");
 
@@ -87,31 +93,68 @@
       const message = form.querySelector('[name="message"]');
       if (!subject || !message) throw new Error("Discuz 發帖欄位結構不同");
 
-      subject.value = item.subject;
-      message.value = item.message;
-      message.dispatchEvent(new Event("input", {bubbles:true}));
-      message.dispatchEvent(new Event("change", {bubbles:true}));
+      const submitAction = form.getAttribute("action") || url;
+      const submitUrl = absolute(submitAction);
+      const formData = new FormData(form);
 
-      const submit = form.querySelector('[type="submit"]');
-      if (!submit) throw new Error("找不到發表主題按鈕");
+      formData.set("subject", item.subject);
+      formData.set("message", item.message);
 
-      form.requestSubmit(submit);
-      await new Promise(r => setTimeout(r, 1800));
-
-      const result = frame.contentDocument;
-      const resultHtml = result && result.documentElement ? result.documentElement.outerHTML : "";
-      const resultText = result && result.body ? result.body.textContent || "" : "";
-      const resultUrl = frame.contentWindow.location.href;
-
-      if (/尚未登錄|尚未登入|請先登錄|沒有權限|權限不足/i.test(resultText + resultHtml)) {
-        throw new Error("Discuz 拒絕發帖：登入狀態或權限有問題");
+      const submitButton = form.querySelector('[name="topicsubmit"], [type="submit"]');
+      if (submitButton && submitButton.name) {
+        formData.set(submitButton.name, submitButton.value || "yes");
+      } else if (!formData.has("topicsubmit")) {
+        formData.set("topicsubmit", "yes");
       }
-      if (/thread-\d+/i.test(resultUrl) || /發表成功|發帖成功|主題已發布|succeedhandle/i.test(resultText + resultHtml)) {
-        return resultUrl;
+
+      const submitController = new AbortController();
+      const submitTimer = setTimeout(() => submitController.abort(), 20000);
+
+      try {
+        const submitResponse = await fetch(submitUrl, {
+          method: "POST",
+          credentials: "same-origin",
+          cache: "no-store",
+          redirect: "follow",
+          signal: submitController.signal,
+          body: formData
+        });
+
+        const resultHtml = await submitResponse.text();
+        const resultUrl = submitResponse.url || submitUrl;
+
+        if (!submitResponse.ok) {
+          throw new Error("Discuz 發帖 HTTP " + submitResponse.status);
+        }
+
+        if (/尚未登錄|尚未登入|請先登錄|沒有權限|權限不足/i.test(resultHtml)) {
+          throw new Error("Discuz 拒絕發帖：登入狀態或權限有問題");
+        }
+
+        const tidMatch =
+          resultUrl.match(/[?&]tid=(\d+)/i) ||
+          resultHtml.match(/[?&]tid=(\d+)/i) ||
+          resultHtml.match(/thread-(\d+)-1-1\.html/i);
+
+        if (tidMatch) {
+          return resultUrl;
+        }
+
+        if (/發表成功|發帖成功|主題已發布|succeedhandle|操作成功/i.test(resultHtml)) {
+          return resultUrl;
+        }
+
+        throw new Error("Discuz 表單已提交，但尚未確認建立主題");
+      } finally {
+        clearTimeout(submitTimer);
       }
-      throw new Error("Discuz 表單已提交，但尚未確認建立主題");
+    } catch (error) {
+      if (error && error.name === "AbortError") {
+        throw new Error("Discuz 發帖請求逾時");
+      }
+      throw error;
     } finally {
-      frame.remove();
+      clearTimeout(timer);
     }
   }
 
