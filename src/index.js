@@ -25,11 +25,21 @@ client.once("ready", async () => {
   console.log("Discord bot online as " + client.user.tag);
   console.log("Guild: " + process.env.DISCORD_GUILD_ID);
   console.log("Channel: " + process.env.DISCORD_CHANNEL_ID);
-  await bridge.start(async (payload) => {
-    const channel = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID);
-    if (!channel?.isTextBased()) throw new Error("Configured Discord channel is not text based");
-    await channel.send(payload);
-  });
+
+  const startBridge = async () => {
+    try {
+      await bridge.start(async (payload) => {
+        const channel = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID);
+        if (!channel?.isTextBased()) throw new Error("Configured Discord channel is not text based");
+        await channel.send(payload);
+      });
+    } catch (error) {
+      console.error("Bridge startup failed:", error);
+      setTimeout(startBridge, bridge.pollMs);
+    }
+  };
+
+  await startBridge();
 });
 
 client.on("messageCreate", async (message) => {
