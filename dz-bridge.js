@@ -55,68 +55,64 @@
   }
 
   async function postPendingItem(item) {
-    const postUrl = absolute(
-      FORUM_ROOT + "forum.php?mod=post&action=newthread&fid=" + encodeURIComponent(FORUM_ID)
-    );
+    const url = absolute(FORUM_ROOT + "forum.php?mod=post&action=newthread&fid=" + encodeURIComponent(FORUM_ID));
+    const frame = document.createElement("iframe");
+    frame.style.cssText = "position:fixed;width:2px;height:2px;left:-9999px;top:-9999px;border:0;";
+    document.body.appendChild(frame);
 
-    const pageResponse = await fetch(postUrl, {
-      credentials: "same-origin",
-      cache: "no-store"
-    });
-    const pageHtml = await pageResponse.text();
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("Discuz 發帖頁載入逾時")), 20000);
+        frame.onload = () => { clearTimeout(timer); resolve(); };
+        frame.onerror = () => { clearTimeout(timer); reject(new Error("Discuz 發帖頁載入失敗")); };
+        frame.src = url;
+      });
 
-    if (/請稍候|just a moment|checking your browser|verify you are human/i.test(pageHtml)) {
-      throw new Error("瀏覽器目前仍停在 Cloudflare 驗證頁");
+      const doc = frame.contentDocument;
+      if (!doc) throw new Error("無法取得 Discuz 發帖頁");
+      const bodyText = doc.body ? doc.body.textContent || "" : "";
+      const html = doc.documentElement ? doc.documentElement.outerHTML : "";
+
+      if (/請稍候|just a moment|checking your browser|verify you are human/i.test(html)) {
+        throw new Error("Discuz 發帖頁仍是 Cloudflare 驗證頁");
+      }
+
+      const form = doc.querySelector("form#postform") ||
+        doc.querySelector('form[action*="forum.php"][action*="post"]');
+      if (!form) throw new Error("找不到 Discuz 發帖表單");
+      const hash = form.querySelector('[name="formhash"]');
+      if (!hash || !hash.value) throw new Error("找不到 formhash，請確認帝國郵政仍登入");
+
+      const subject = form.querySelector('[name="subject"]');
+      const message = form.querySelector('[name="message"]');
+      if (!subject || !message) throw new Error("Discuz 發帖欄位結構不同");
+
+      subject.value = item.subject;
+      message.value = item.message;
+      message.dispatchEvent(new Event("input", {bubbles:true}));
+      message.dispatchEvent(new Event("change", {bubbles:true}));
+
+      const submit = form.querySelector('[type="submit"]');
+      if (!submit) throw new Error("找不到發表主題按鈕");
+
+      form.requestSubmit(submit);
+      await new Promise(r => setTimeout(r, 1800));
+
+      const result = frame.contentDocument;
+      const resultHtml = result && result.documentElement ? result.documentElement.outerHTML : "";
+      const resultText = result && result.body ? result.body.textContent || "" : "";
+      const resultUrl = frame.contentWindow.location.href;
+
+      if (/尚未登錄|尚未登入|請先登錄|沒有權限|權限不足/i.test(resultText + resultHtml)) {
+        throw new Error("Discuz 拒絕發帖：登入狀態或權限有問題");
+      }
+      if (/thread-\d+/i.test(resultUrl) || /發表成功|發帖成功|主題已發布|succeedhandle/i.test(resultText + resultHtml)) {
+        return resultUrl;
+      }
+      throw new Error("Discuz 表單已提交，但尚未確認建立主題");
+    } finally {
+      frame.remove();
     }
-
-    const doc = new DOMParser().parseFromString(pageHtml, "text/html");
-    const form =
-      doc.querySelector("form#postform") ||
-      doc.querySelector('form[action*="forum.php"][action*="post"]');
-
-    if (!form) {
-      throw new Error("找不到 Discuz 發帖表單，請確認「帝國郵政」仍保持登入");
-    }
-
-    const formHash = form.querySelector('input[name="formhash"]');
-    if (!formHash || !formHash.value) {
-      throw new Error("找不到 formhash，登入 Session 可能已失效");
-    }
-
-    const formData = new FormData(form);
-    formData.set("subject", item.subject);
-    formData.set("message", item.message);
-    formData.set("topicsubmit", "yes");
-    formData.set("posttime", String(Math.floor(Date.now() / 1000)));
-
-    const action = absolute(form.getAttribute("action") || postUrl);
-    const response = await fetch(action, {
-      method: "POST",
-      body: formData,
-      credentials: "same-origin",
-      cache: "no-store",
-      redirect: "follow"
-    });
-
-    const resultHtml = await response.text();
-    if (/尚未登錄|尚未登入|請先登錄|沒有權限|權限不足/i.test(resultHtml)) {
-      throw new Error("Discuz 拒絕發帖：登入狀態或論壇權限有問題");
-    }
-
-    if (/請稍候|just a moment|checking your browser|verify you are human/i.test(resultHtml)) {
-      throw new Error("Discuz POST 又被 Cloudflare Challenge 攔下");
-    }
-
-    const success =
-      /thread-\d+-1-1\.html/i.test(resultHtml) ||
-      /發表成功|發帖成功|主題已發布|succeedhandle/i.test(resultHtml) ||
-      /thread-\d+/i.test(response.url);
-
-    if (!success) {
-      throw new Error("Discuz 回應無法確認發帖成功");
-    }
-
-    return response.url;
   }
 
   async function relayDiscordToDiscuz() {
