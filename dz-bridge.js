@@ -2,7 +2,7 @@
 (function () {
   "use strict";
 
-  const BRIDGE_VERSION = "2026.09.29.21";
+  const BRIDGE_VERSION = "2026.10.01.01";
   window.__WONGMING_DZ_BRIDGE_RUNTIME__ = BRIDGE_VERSION;
   window.__WONGMING_DZ_BRIDGE_LAST_LOAD__ = Date.now();
 
@@ -166,7 +166,9 @@
         // comparing tid numbers, which are not chronological across migrations.
         const newest = threads[0];
 
-        threads.forEach(t => known.add(t.tid));
+        // Bootstrap all currently visible topics as known EXCEPT the newest one.
+        // The newest topic is only marked known after Discord delivery succeeds.
+        threads.slice(1).forEach(t => known.add(t.tid));
 
         if (newest) {
           try {
@@ -188,8 +190,10 @@
               threadDoc.querySelector(".message");
             const content = (post ? post.textContent : "").replace(/\s+/g, " ").trim();
 
-            if (!content.includes("[DC->DZ]")) {
-              await api("/bridge/forum-post", {
+            if (content.includes("[DC->DZ]")) {
+              known.add(newest.tid);
+            } else {
+              const result = await api("/bridge/forum-post", {
                 method: "POST",
                 body: JSON.stringify({
                   tid: newest.tid,
@@ -198,9 +202,16 @@
                   url: newest.url
                 })
               });
-              log("Discuz → Discord 首次同步最新文章:", newest.tid, newest.title);
+
+              if (result && result.ok === true) {
+                known.add(newest.tid);
+                log("Discuz → Discord 首次同步成功確認:", newest.tid, newest.title);
+              } else {
+                throw new Error("Discord relay did not confirm delivery");
+              }
             }
           } catch (error) {
+            // Do not mark the topic as known on failure. The next scan retries it.
             setError(error);
           }
         }
@@ -212,35 +223,54 @@
 
       for (const thread of threads) {
         if (known.has(thread.tid)) continue;
-        known.add(thread.tid);
 
-        const threadResponse = await fetch(thread.url, {
-          credentials: "same-origin",
-          cache: "no-store"
-        });
-        const threadHtml = await threadResponse.text();
+        try {
+          const threadResponse = await fetch(thread.url, {
+            credentials: "same-origin",
+            cache: "no-store"
+          });
+          const threadHtml = await threadResponse.text();
 
-        if (/請稍候|just a moment|checking your browser|verify you are human/i.test(threadHtml)) {
-          throw new Error("主題頁被 Cloudflare Challenge");
+          if (/請稍候|just a moment|checking your browser|verify you are human/i.test(threadHtml)) {
+            throw new Error("主題頁被 Cloudflare Challenge");
+          }
+
+          const threadDoc = new DOMParser().parseFromString(threadHtml, "text/html");
+          const post =
+            threadDoc.querySelector(".pcb") ||
+            threadDoc.querySelector('[id^="postmessage_"]') ||
+            threadDoc.querySelector(".t_f") ||
+            threadDoc.querySelector(".message");
+          const content = (post ? post.textContent : "").replace(/\s+/g, " ").trim();
+
+          if (content.includes("[DC->DZ]")) {
+            known.add(thread.tid);
+            saveKnown(known);
+            continue;
+          }
+
+          const result = await api("/bridge/forum-post", {
+            method: "POST",
+            body: JSON.stringify({
+              tid: thread.tid,
+              title: thread.title,
+              content: content.slice(0, 6000),
+              url: thread.url
+            })
+          });
+
+          // Only remember a topic after the server confirms delivery.
+          if (!result || result.ok !== true) {
+            throw new Error("Discord relay did not confirm delivery");
+          }
+
+          known.add(thread.tid);
+          saveKnown(known);
+          log("Discuz → Discord 成功確認:", thread.tid, thread.title);
+        } catch (error) {
+          // Failed attempts remain retryable on the next scan.
+          setError("同步主題 " + thread.tid + " 失敗：" + (error?.message || error));
         }
-
-        const threadDoc = new DOMParser().parseFromString(threadHtml, "text/html");
-        const post = threadDoc.querySelector(".pcb");
-        const content = (post ? post.textContent : "").replace(/\s+/g, " ").trim();
-
-        if (content.includes("[DC->DZ]")) continue;
-
-        await api("/bridge/forum-post", {
-          method: "POST",
-          body: JSON.stringify({
-            tid: thread.tid,
-            title: thread.title,
-            content: content.slice(0, 6000),
-            url: thread.url
-          })
-        });
-
-        log("Discuz → Discord 成功:", thread.tid);
       }
 
       saveKnown(known);
