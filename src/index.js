@@ -280,3 +280,8 @@ client.on("messageCreate", async message => {
   // Discord → Discuz is intentionally disabled.
   // Do not queue Discord messages for the browser relay.
 });
+
+client.login(process.env.DISCORD_BOT_TOKEN).catch(error => {
+  console.error("Discord login failed:", error);
+  process.exitCode = 1;
+});
