@@ -10,7 +10,7 @@
   const FORUM_ROOT = "/bbswm/";
   const FORUM_ID = "53";
   const SCAN_MS = 30000;
-  const STORAGE_KEY = "wongming_dz_known_threads_v3";
+  const STORAGE_KEY = "wongming_dz_known_threads_v4";
 
   const state = {
     connected: false,
@@ -89,13 +89,30 @@
     const out = [];
     const seen = new Set();
 
-    for (const a of doc.querySelectorAll("a[href]")) {
+    function isPinned(anchor) {
+      const row = anchor.closest("tr");
+      const tbody = anchor.closest("tbody");
+      const markers = [
+        row?.id || "",
+        row?.className || "",
+        tbody?.id || "",
+        tbody?.className || ""
+      ].join(" ").toLowerCase();
+      return /stickthread|sticky|topthread|置頂|置顶/.test(markers);
+    }
+
+    const normalAnchors = doc.querySelectorAll(
+      'tbody[id^="normalthread_"] a[href], tbody[id^="normalthread"] a[href]'
+    );
+    const anchors = normalAnchors.length ? normalAnchors : doc.querySelectorAll("a[href]");
+
+    for (const a of anchors) {
+      if (isPinned(a)) continue;
+
       const href = a.getAttribute("href") || "";
       let tid = "";
-
-      // Discuz can expose thread links in either SEO form
-      // (thread-123-1-1.html) or normal forum.php?mod=viewthread&tid=123 form.
       const seo = href.match(/(?:^|\/)thread-(\d+)(?:-[^/?#]+)*\.html(?:[?#]|$)/i);
+
       if (seo) {
         tid = seo[1];
       } else {
@@ -115,11 +132,7 @@
       if (!title) continue;
 
       seen.add(tid);
-      out.push({
-        tid,
-        title,
-        url: absolute(href)
-      });
+      out.push({ tid, title, url: absolute(href) });
     }
 
     return out;
@@ -158,69 +171,15 @@
       } catch {}
 
       if (known.size === 0) {
-        // On first bootstrap, preserve the current forum state but also forward
-        // the newest visible thread once, so the first fresh scan does not
-        // silently discard the latest forum post.
-        // Discuz's forum page is already ordered by the forum's own
-        // newest/relevance rules. Use the first visible topic rather than
-        // comparing tid numbers, which are not chronological across migrations.
-        const newest = threads[0];
-
-        // Bootstrap all currently visible topics as known EXCEPT the newest one.
-        // The newest topic is only marked known after Discord delivery succeeds.
-        threads.slice(1).forEach(t => known.add(t.tid));
-
-        if (newest) {
-          try {
-            const threadResponse = await fetch(newest.url, {
-              credentials: "same-origin",
-              cache: "no-store"
-            });
-            const threadHtml = await threadResponse.text();
-
-            if (/請稍候|just a moment|checking your browser|verify you are human/i.test(threadHtml)) {
-              throw new Error("主題頁被 Cloudflare Challenge");
-            }
-
-            const threadDoc = new DOMParser().parseFromString(threadHtml, "text/html");
-            const post =
-              threadDoc.querySelector(".pcb") ||
-              threadDoc.querySelector('[id^="postmessage_"]') ||
-              threadDoc.querySelector(".t_f") ||
-              threadDoc.querySelector(".message");
-            const content = (post ? post.textContent : "").replace(/\s+/g, " ").trim();
-
-            if (content.includes("[DC->DZ]")) {
-              known.add(newest.tid);
-            } else {
-              const result = await api("/bridge/forum-post", {
-                method: "POST",
-                body: JSON.stringify({
-                  tid: newest.tid,
-                  title: newest.title,
-                  content: content.slice(0, 6000),
-                  url: newest.url
-                })
-              });
-
-              if (result && result.ok === true) {
-                known.add(newest.tid);
-                log("Discuz → Discord 首次同步成功確認:", newest.tid, newest.title);
-              } else {
-                throw new Error("Discord relay did not confirm delivery");
-              }
-            }
-          } catch (error) {
-            // Do not mark the topic as known on failure. The next scan retries it.
-            setError(error);
-          }
-        }
-
+        // First run: seed current ordinary topics only.
+        // Historical topics must never be mistaken for a new post.
+        threads.forEach(t => known.add(t.tid));
         saveKnown(known);
         state.lastScan = new Date().toISOString();
+        state.connected = true;
+        log("首次掃描：已建立現有普通主題基準，共", threads.length, "篇；不轉發歷史文章。");
         return;
       }
-
       for (const thread of threads) {
         if (known.has(thread.tid)) continue;
 
