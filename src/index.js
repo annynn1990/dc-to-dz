@@ -255,7 +255,7 @@ const server = createServer(async (req, res) => {
           (content || "(無內容)") +
           (threadUrl ? "\n<" + threadUrl + ">" : "");
 
-        await channel.send(message);
+        await channel.send({ content: message, nonce: "dz-forum-" + tid, enforceNonce: true });
       })();
 
       deliveryInFlight.set(tid, deliveryPromise);
