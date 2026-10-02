@@ -15,6 +15,7 @@ const ALLOWED_ORIGINS = new Set([
 const pendingToDiscuz = [];
 const pendingById = new Map();
 const deliveredToDiscord = new Set();
+const deliveryInFlight = new Map();
 
 function json(res, status, body, origin) {
   const headers = {
@@ -205,9 +206,11 @@ const server = createServer(async (req, res) => {
       return json(res, 403, { ok: false, error: "origin-not-allowed" });
     }
 
+    let tid = "";
+
     try {
       const body = JSON.parse(await readBody(req));
-      const tid = String(body.tid || "");
+      tid = String(body.tid || "");
       const title = String(body.title || "Discuz 新主題").slice(0, 200);
       const content = String(body.content || "").slice(0, 6000);
       const threadUrl = String(body.url || "");
@@ -220,29 +223,70 @@ const server = createServer(async (req, res) => {
         return json(res, 503, { ok: false, error: "discord-not-ready" }, origin);
       }
 
-      const channel = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID);
-      if (!channel?.isTextBased()) {
-        return json(res, 500, { ok: false, error: "channel-not-text" }, origin);
+      // Multiple browser scanners/tabs can submit the same tid concurrently.
+      // Share one in-flight Discord send so the same topic is never sent twice
+      // by this process.
+      const existingDelivery = deliveryInFlight.get(tid);
+      if (existingDelivery) {
+        try {
+          await existingDelivery;
+          return json(res, 200, {
+            ok: true,
+            delivered: true,
+            deduplicated: true
+          }, origin);
+        } catch (error) {
+          return json(res, 500, {
+            ok: false,
+            error: String(error?.message || error)
+          }, origin);
+        }
       }
 
-      const message =
-        "**有一則來自首都延興廣場的主題**\n" +
-        "**" + title.replace(/\*/g, "") + "**\n" +
-        (content || "(無內容)") +
-        (threadUrl ? "\n<" + threadUrl + ">" : "");
+      const deliveryPromise = (async () => {
+        const channel = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID);
+        if (!channel?.isTextBased()) {
+          throw new Error("channel-not-text");
+        }
 
-      await channel.send(message);
-      deliveredToDiscord.add(tid);
+        const message =
+          "**有一則來自首都延興廣場的主題**\n" +
+          "**" + title.replace(/\*/g, "") + "**\n" +
+          (content || "(無內容)") +
+          (threadUrl ? "\n<" + threadUrl + ">" : "");
 
-      if (deliveredToDiscord.size > 2000) {
-        const first = deliveredToDiscord.values().next().value;
-        if (first) deliveredToDiscord.delete(first);
+        await channel.send(message);
+      })();
+
+      deliveryInFlight.set(tid, deliveryPromise);
+
+      try {
+        await deliveryPromise;
+        deliveredToDiscord.add(tid);
+
+        if (deliveredToDiscord.size > 2000) {
+          const first = deliveredToDiscord.values().next().value;
+          if (first) deliveredToDiscord.delete(first);
+        }
+
+        return json(res, 200, { ok: true, delivered: true }, origin);
+      } catch (error) {
+        console.error("Forum -> Discord relay failed:", error);
+        return json(res, 500, {
+          ok: false,
+          error: String(error?.message || error)
+        }, origin);
+      } finally {
+        if (deliveryInFlight.get(tid) === deliveryPromise) {
+          deliveryInFlight.delete(tid);
+        }
       }
-
-      return json(res, 200, { ok: true, delivered: true }, origin);
     } catch (error) {
       console.error("Forum -> Discord relay failed:", error);
-      return json(res, 500, { ok: false, error: String(error?.message || error) }, origin);
+      return json(res, 500, {
+        ok: false,
+        error: String(error?.message || error)
+      }, origin);
     }
   }
 
