@@ -17,6 +17,32 @@ const pendingById = new Map();
 const deliveredToDiscord = new Set();
 const deliveryInFlight = new Map();
 
+async function hasExistingForumNotification(channel, threadUrl) {
+  const needle = String(threadUrl || "").trim();
+  if (!needle) return false;
+
+  let before;
+  // Discord history is the durable dedupe source; this survives restarts.
+  for (let page = 0; page < 20; page += 1) {
+    const options = { limit: 100 };
+    if (before) options.before = before;
+
+    const messages = await channel.messages.fetch(options);
+    if (!messages.size) return false;
+
+    for (const message of messages.values()) {
+      if (message.author?.id !== client.user?.id) continue;
+      if (String(message.content || "").includes(needle)) return true;
+    }
+
+    const oldest = messages.last();
+    if (!oldest || messages.size < 100) return false;
+    before = oldest.id;
+  }
+
+  return false;
+}
+
 function json(res, status, body, origin) {
   const headers = {
     "Content-Type": "application/json; charset=utf-8",
@@ -249,13 +275,26 @@ const server = createServer(async (req, res) => {
           throw new Error("channel-not-text");
         }
 
+        // Durable dedupe: exact Discuz thread URL remains searchable after
+        // Render restarts/redeployments.
+        if (threadUrl && await hasExistingForumNotification(channel, threadUrl)) {
+          deliveredToDiscord.add(tid);
+          return;
+        }
+
         const message =
           "**有一則來自首都延興廣場的主題**\n" +
           "**" + title.replace(/\*/g, "") + "**\n" +
           (content || "(無內容)") +
           (threadUrl ? "\n<" + threadUrl + ">" : "");
 
-        await channel.send({ content: message, nonce: "dz-forum-" + tid, enforceNonce: true });
+        // Nonce protects the short concurrent race; history check protects
+        // the long-lived/restart case.
+        await channel.send({
+          content: message,
+          nonce: "dz-forum-" + tid,
+          enforceNonce: true
+        });
       })();
 
       deliveryInFlight.set(tid, deliveryPromise);
