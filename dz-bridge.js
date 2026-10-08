@@ -12,6 +12,8 @@
   const FORUM_ROOT = "/bbswm/";
   const FORUM_ID = "53";
   const SCAN_MS = 30000;
+  // One-time recovery for the thread that was just missed by the broken first-scan logic.
+  const FORCE_RELAY_TID = "41002";
   const known = new Set();
 
   const state = {
@@ -147,59 +149,74 @@
         });
       } catch {}
 
+      async function relayThread(thread) {
+        const threadResponse = await fetch(thread.url, {
+          credentials: "same-origin",
+          cache: "no-store"
+        });
+        const threadHtml = await threadResponse.text();
+
+        if (/請稍候|just a moment|checking your browser|verify you are human/i.test(threadHtml)) {
+          throw new Error("主題頁被 Cloudflare Challenge");
+        }
+
+        const threadDoc = new DOMParser().parseFromString(threadHtml, "text/html");
+        const post =
+          threadDoc.querySelector(".pcb") ||
+          threadDoc.querySelector('[id^="postmessage_"]') ||
+          threadDoc.querySelector(".t_f") ||
+          threadDoc.querySelector(".message");
+        const content = (post ? post.textContent : "").replace(/\s+/g, " ").trim();
+
+        if (content.includes("[DC->DZ]")) {
+          known.add(thread.tid);
+          return;
+        }
+
+        const result = await api("/bridge/forum-post", {
+          method: "POST",
+          body: JSON.stringify({
+            tid: thread.tid,
+            title: thread.title,
+            content: content.slice(0, 6000),
+            url: thread.url
+          })
+        });
+
+        if (!result || result.ok !== true) {
+          throw new Error("Discord relay did not confirm delivery");
+        }
+
+        known.add(thread.tid);
+        log("Discuz → Discord 成功確認:", thread.tid, thread.title);
+      }
+
       if (known.size === 0) {
-        // First run: seed current ordinary topics only.
-        // Historical topics must never be mistaken for a new post.
+        // First run: seed current ordinary topics, but explicitly retry the topic
+        // that was missed before this fix was deployed.
+        const forced = threads.find(t => t.tid === FORCE_RELAY_TID);
+        if (forced) {
+          try {
+            await relayThread(forced);
+            log("已補發漏掉的 Discuz 主題:", forced.tid, forced.title);
+          } catch (error) {
+            setError("補發主題 " + forced.tid + " 失敗：" + (error?.message || error));
+          }
+        }
+
+        // Historical topics must never otherwise be mistaken for a new post.
         threads.forEach(t => known.add(t.tid));
         state.lastScan = new Date().toISOString();
         state.connected = true;
-        log("首次掃描：已建立現有普通主題基準，共", threads.length, "篇；不轉發歷史文章。");
+        log("首次掃描：已建立現有普通主題基準，共", threads.length, "篇；除補發指定主題外，不轉發歷史文章。");
         return;
       }
+
       for (const thread of threads) {
         if (known.has(thread.tid)) continue;
 
         try {
-          const threadResponse = await fetch(thread.url, {
-            credentials: "same-origin",
-            cache: "no-store"
-          });
-          const threadHtml = await threadResponse.text();
-
-          if (/請稍候|just a moment|checking your browser|verify you are human/i.test(threadHtml)) {
-            throw new Error("主題頁被 Cloudflare Challenge");
-          }
-
-          const threadDoc = new DOMParser().parseFromString(threadHtml, "text/html");
-          const post =
-            threadDoc.querySelector(".pcb") ||
-            threadDoc.querySelector('[id^="postmessage_"]') ||
-            threadDoc.querySelector(".t_f") ||
-            threadDoc.querySelector(".message");
-          const content = (post ? post.textContent : "").replace(/\s+/g, " ").trim();
-
-          if (content.includes("[DC->DZ]")) {
-            known.add(thread.tid);
-                continue;
-          }
-
-          const result = await api("/bridge/forum-post", {
-            method: "POST",
-            body: JSON.stringify({
-              tid: thread.tid,
-              title: thread.title,
-              content: content.slice(0, 6000),
-              url: thread.url
-            })
-          });
-
-          // Only remember a topic after the server confirms delivery.
-          if (!result || result.ok !== true) {
-            throw new Error("Discord relay did not confirm delivery");
-          }
-
-          known.add(thread.tid);
-            log("Discuz → Discord 成功確認:", thread.tid, thread.title);
+          await relayThread(thread);
         } catch (error) {
           // Failed attempts remain retryable on the next scan.
           setError("同步主題 " + thread.tid + " 失敗：" + (error?.message || error));
