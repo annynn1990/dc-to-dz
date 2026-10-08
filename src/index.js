@@ -29,29 +29,70 @@ async function withTimeout(promise, ms, label) {
   }
 }
 
-async function hasExistingForumNotification(channel, threadUrl) {
+async function discordRest(path, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch("https://discord.com/api/v10" + path, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        Authorization: "Bot " + process.env.DISCORD_BOT_TOKEN,
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      }
+    });
+
+    const text = await response.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+
+    if (!response.ok) {
+      throw new Error(
+        "Discord REST " + response.status + ": " +
+        (data?.message || text.slice(0, 300))
+      );
+    }
+
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function hasExistingForumNotification(threadUrl) {
   const needle = String(threadUrl || "").trim();
   if (!needle) return false;
 
   try {
-    // Only inspect the newest 100 messages. The bridge marker/URL is enough
-    // to survive normal Render restarts without walking the entire channel.
-    const messages = await withTimeout(
-      channel.messages.fetch({ limit: 100 }),
-      5000,
-      "Discord history lookup"
+    const messages = await discordRest(
+      "/channels/" + encodeURIComponent(process.env.DISCORD_CHANNEL_ID) + "/messages?limit=100",
+      { method: "GET" },
+      5000
     );
 
-    for (const message of messages.values()) {
-      if (message.author?.id !== client.user?.id) continue;
-      if (String(message.content || "").includes(needle)) return true;
-    }
+    return Array.isArray(messages) && messages.some(message =>
+      String(message?.content || "").includes(needle)
+    );
   } catch (error) {
-    // A slow Discord history lookup must never block the relay indefinitely.
-    console.warn("Discord dedupe lookup failed:", error?.message || error);
+    console.warn("Discord REST dedupe lookup failed:", error?.message || error);
+    return false;
   }
+}
 
-  return false;
+async function sendDiscordMessage(content, tid) {
+  return discordRest(
+    "/channels/" + encodeURIComponent(process.env.DISCORD_CHANNEL_ID) + "/messages",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        content,
+        nonce: "dz-forum-" + tid,
+        enforce_nonce: true
+      })
+    },
+    12000
+  );
 }
 
 function json(res, status, body, origin) {
@@ -257,11 +298,6 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { ok: true, ignored: true }, origin);
       }
 
-      if (!client.isReady()) {
-        console.error(JSON.stringify({ type: "forum_to_discord_not_ready", tid }));
-        return json(res, 503, { ok: false, error: "discord-not-ready" }, origin);
-      }
-
       console.log(JSON.stringify({ type: "forum_to_discord_received", tid }));
 
       // Multiple browser scanners/tabs can submit the same tid concurrently.
@@ -285,14 +321,10 @@ const server = createServer(async (req, res) => {
       }
 
       const deliveryPromise = (async () => {
-        const channel = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID);
-        if (!channel?.isTextBased()) {
-          throw new Error("channel-not-text");
-        }
+        console.log(JSON.stringify({ type: "forum_to_discord_start", tid, threadUrl }));
 
-        // Durable dedupe: exact Discuz thread URL remains searchable after
-        // Render restarts/redeployments.
-        if (threadUrl && await hasExistingForumNotification(channel, threadUrl)) {
+        if (threadUrl && await hasExistingForumNotification(threadUrl)) {
+          console.log(JSON.stringify({ type: "forum_to_discord_deduplicated", tid }));
           deliveredToDiscord.add(tid);
           return;
         }
@@ -301,15 +333,11 @@ const server = createServer(async (req, res) => {
           "**有一則來自首都延興廣場的主題**\n" +
           "**" + title.replace(/\*/g, "") + "**\n" +
           (content || "(無內容)") +
-          (threadUrl ? "\n<" + threadUrl + ">" : "");
+          (threadUrl ? "\n<" + threadUrl + ">" : "") +
+          "\n[WM-DZ-TID:" + tid + "]";
 
-        // Nonce protects the short concurrent race; history check protects
-        // the long-lived/restart case.
-        await channel.send({
-          content: message,
-          nonce: "dz-forum-" + tid,
-          enforceNonce: true
-        });
+        await sendDiscordMessage(message, tid);
+        console.log(JSON.stringify({ type: "forum_to_discord_success", tid }));
       })();
 
       deliveryInFlight.set(tid, deliveryPromise);
