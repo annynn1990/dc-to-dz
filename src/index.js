@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { Client } from "discord.js";
+import { Client, GatewayIntentBits } from "discord.js";
 
 const required = ["DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "DISCORD_CHANNEL_ID"];
 for (const key of required) {
@@ -387,7 +387,7 @@ const serverReady = new Promise(resolve => {
 // The bridge no longer reads Discord messages. No privileged Gateway intents
 // are required just to keep 帝國郵政 online and identify the bot.
 const client = new Client({
-  intents: []
+  intents: [GatewayIntentBits.Guilds]
 });
 
 client.once("ready", async () => {
