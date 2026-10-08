@@ -398,13 +398,27 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds]
 });
 
-client.once("ready", async () => {
-  console.log("Discord bot online as " + client.user.tag);
+client.once("clientReady", async readyClient => {
+  console.log("Discord bot online as " + readyClient.user.tag);
+  console.log("Discord Gateway READY; guilds cached:", readyClient.guilds.cache.size);
   console.log("Guild: " + process.env.DISCORD_GUILD_ID);
   console.log("Channel: " + process.env.DISCORD_CHANNEL_ID);
   console.log("Discord → Discuz disabled; Discuz → Discord reverse relay active");
 
+  try {
+    readyClient.user.setPresence({ status: "online" });
+    console.log("Discord presence set to online");
+  } catch (error) {
+    console.error("Discord presence setup failed:", error);
+  }
+
   await serverReady;
+});
+
+client.on("debug", info => {
+  if (/gateway|identify|resume|heartbeat|ready|session/i.test(String(info))) {
+    console.log("Discord debug:", info);
+  }
 });
 
 client.on("error", error => {
@@ -413,6 +427,19 @@ client.on("error", error => {
 
 client.on("warn", warning => {
   console.warn("Discord client warning:", warning);
+});
+
+client.on("shardReady", (id, unavailableGuilds) => {
+  console.log(
+    "Discord shard ready:",
+    id,
+    "unavailableGuilds:",
+    unavailableGuilds?.size ?? 0
+  );
+});
+
+client.on("shardResume", (id, replayedEvents) => {
+  console.log("Discord shard resumed:", id, "replayedEvents:", replayedEvents);
 });
 
 client.on("shardError", error => {
@@ -427,12 +454,32 @@ client.on("shardDisconnect", (event, id) => {
   console.warn("Discord gateway disconnected, shard:", id, "code:", event?.code);
 });
 
+client.on("invalidated", () => {
+  console.error("Discord session invalidated; shutting down for a clean restart.");
+  process.exit(1);
+});
+
 client.on("messageCreate", async message => {
   // Discord → Discuz is intentionally disabled.
   // Do not queue Discord messages for the browser relay.
 });
 
-client.login(process.env.DISCORD_BOT_TOKEN).catch(error => {
-  console.error("Discord login failed:", error);
-  process.exitCode = 1;
-});
+console.log("Starting Discord login...");
+const discordLoginPromise = client.login(process.env.DISCORD_BOT_TOKEN);
+
+const discordLoginTimeout = setTimeout(() => {
+  if (!client.isReady()) {
+    console.error("Discord login timeout: Gateway did not become READY within 30 seconds.");
+    process.exit(1);
+  }
+}, 30000);
+
+discordLoginPromise
+  .then(() => {
+    console.log("Discord login() promise resolved; waiting for Gateway READY.");
+  })
+  .catch(error => {
+    clearTimeout(discordLoginTimeout);
+    console.error("Discord login failed:", error);
+    process.exit(1);
+  });
