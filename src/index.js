@@ -29,6 +29,10 @@ async function withTimeout(promise, ms, label) {
   }
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function discordRest(path, options = {}, timeoutMs = 12000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -48,10 +52,21 @@ async function discordRest(path, options = {}, timeoutMs = 12000) {
     try { data = text ? JSON.parse(text) : null; } catch {}
 
     if (!response.ok) {
-      throw new Error(
+      const retryAfterHeader = Number(response.headers.get("retry-after") || 0);
+      const retryAfterBody = Number(data?.retry_after || 0);
+      const retryAfterMs = Math.max(
+        retryAfterHeader * 1000,
+        retryAfterBody * 1000,
+        0
+      );
+
+      const error = new Error(
         "Discord REST " + response.status + ": " +
         (data?.message || text.slice(0, 300))
       );
+      error.status = response.status;
+      error.retryAfterMs = retryAfterMs;
+      throw error;
     }
 
     return data;
@@ -60,39 +75,38 @@ async function discordRest(path, options = {}, timeoutMs = 12000) {
   }
 }
 
-async function hasExistingForumNotification(threadUrl) {
-  const needle = String(threadUrl || "").trim();
-  if (!needle) return false;
-
-  try {
-    const messages = await discordRest(
-      "/channels/" + encodeURIComponent(process.env.DISCORD_CHANNEL_ID) + "/messages?limit=100",
-      { method: "GET" },
-      5000
-    );
-
-    return Array.isArray(messages) && messages.some(message =>
-      String(message?.content || "").includes(needle)
-    );
-  } catch (error) {
-    console.warn("Discord REST dedupe lookup failed:", error?.message || error);
-    return false;
-  }
-}
-
 async function sendDiscordMessage(content, tid) {
-  return discordRest(
-    "/channels/" + encodeURIComponent(process.env.DISCORD_CHANNEL_ID) + "/messages",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        content,
-        nonce: "dz-forum-" + tid,
-        enforce_nonce: true
-      })
-    },
-    12000
-  );
+  const maxAttempts = 5;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await discordRest(
+        "/channels/" + encodeURIComponent(process.env.DISCORD_CHANNEL_ID) + "/messages",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            content,
+            nonce: "dz-forum-" + tid,
+            enforce_nonce: true
+          })
+        },
+        12000
+      );
+    } catch (error) {
+      if (error?.status !== 429 || attempt === maxAttempts) {
+        throw error;
+      }
+
+      const fallback = Math.min(5000 * Math.pow(2, attempt - 1), 30000);
+      const waitMs = Math.max(1000, Math.min(error.retryAfterMs || fallback, 30000));
+
+      console.warn(
+        "Discord REST 429; retrying in " + waitMs + "ms (attempt " +
+        attempt + "/" + maxAttempts + ")"
+      );
+      await sleep(waitMs);
+    }
+  }
 }
 
 function json(res, status, body, origin) {
@@ -322,12 +336,6 @@ const server = createServer(async (req, res) => {
 
       const deliveryPromise = (async () => {
         console.log(JSON.stringify({ type: "forum_to_discord_start", tid, threadUrl }));
-
-        if (threadUrl && await hasExistingForumNotification(threadUrl)) {
-          console.log(JSON.stringify({ type: "forum_to_discord_deduplicated", tid }));
-          deliveredToDiscord.add(tid);
-          return;
-        }
 
         const message =
           "**有一則來自首都延興廣場的主題**\n" +
