@@ -374,6 +374,26 @@ client.once("ready", async () => {
   await serverReady;
 });
 
+client.on("error", error => {
+  console.error("Discord client error:", error);
+});
+
+client.on("warn", warning => {
+  console.warn("Discord client warning:", warning);
+});
+
+client.on("shardError", error => {
+  console.error("Discord gateway shard error:", error);
+});
+
+client.on("shardReconnecting", id => {
+  console.warn("Discord gateway reconnecting, shard:", id);
+});
+
+client.on("shardDisconnect", (event, id) => {
+  console.warn("Discord gateway disconnected, shard:", id, "code:", event?.code);
+});
+
 client.on("messageCreate", async message => {
   // Discord → Discuz is intentionally disabled.
   // Do not queue Discord messages for the browser relay.
