@@ -2,7 +2,9 @@
 (function () {
   "use strict";
 
-  const BRIDGE_VERSION = "2026.10.01.01";
+  const BRIDGE_VERSION = "2026.10.08.01";
+  if (window.__WONGMING_DZ_BRIDGE_STARTED__) return;
+  window.__WONGMING_DZ_BRIDGE_STARTED__ = true;
   window.__WONGMING_DZ_BRIDGE_RUNTIME__ = BRIDGE_VERSION;
   window.__WONGMING_DZ_BRIDGE_LAST_LOAD__ = Date.now();
 
@@ -10,7 +12,7 @@
   const FORUM_ROOT = "/bbswm/";
   const FORUM_ID = "53";
   const SCAN_MS = 30000;
-  const STORAGE_KEY = "wongming_dz_known_threads_v4";
+  const known = new Set();
 
   const state = {
     connected: false,
@@ -55,34 +57,10 @@
     return new URL(url, location.href).href;
   }
 
-  const RELAY_CLIENT_ID = (() => {
-    try {
-      const key = "wongming_dz_relay_client_id";
-      let id = sessionStorage.getItem(key);
-      if (!id) {
-        id = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ("wm-" + Date.now() + "-" + Math.random().toString(36).slice(2));
-        sessionStorage.setItem(key, id);
-      }
-      return id;
-    } catch {
-      return "wm-" + Date.now() + "-" + Math.random().toString(36).slice(2);
-    }
-  })();
-
-  function loadKnown() {
-    try {
-      const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-      return new Set(Array.isArray(data) ? data.map(String) : []);
-    } catch {
-      return new Set();
-    }
-  }
-
-  function saveKnown(set) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([...set].slice(-500)));
-    } catch {}
-  }
+  const RELAY_CLIENT_ID =
+    (crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : ("wm-" + Date.now() + "-" + Math.random().toString(36).slice(2));
 
   function parseThreads(html) {
     const doc = new DOMParser().parseFromString(html, "text/html");
@@ -155,7 +133,6 @@
       }
 
       const threads = parseThreads(html);
-      const known = loadKnown();
 
       try {
         await api("/bridge/scan-status", {
@@ -174,7 +151,6 @@
         // First run: seed current ordinary topics only.
         // Historical topics must never be mistaken for a new post.
         threads.forEach(t => known.add(t.tid));
-        saveKnown(known);
         state.lastScan = new Date().toISOString();
         state.connected = true;
         log("首次掃描：已建立現有普通主題基準，共", threads.length, "篇；不轉發歷史文章。");
@@ -204,8 +180,7 @@
 
           if (content.includes("[DC->DZ]")) {
             known.add(thread.tid);
-            saveKnown(known);
-            continue;
+                continue;
           }
 
           const result = await api("/bridge/forum-post", {
@@ -224,15 +199,13 @@
           }
 
           known.add(thread.tid);
-          saveKnown(known);
-          log("Discuz → Discord 成功確認:", thread.tid, thread.title);
+            log("Discuz → Discord 成功確認:", thread.tid, thread.title);
         } catch (error) {
           // Failed attempts remain retryable on the next scan.
           setError("同步主題 " + thread.tid + " 失敗：" + (error?.message || error));
         }
       }
 
-      saveKnown(known);
       state.lastScan = new Date().toISOString();
       state.connected = true;
     } catch (error) {
