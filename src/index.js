@@ -17,27 +17,38 @@ const pendingById = new Map();
 const deliveredToDiscord = new Set();
 const deliveryInFlight = new Map();
 
+async function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(label + " timeout")), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function hasExistingForumNotification(channel, threadUrl) {
   const needle = String(threadUrl || "").trim();
   if (!needle) return false;
 
-  let before;
-  // Discord history is the durable dedupe source; this survives restarts.
-  for (let page = 0; page < 20; page += 1) {
-    const options = { limit: 100 };
-    if (before) options.before = before;
-
-    const messages = await channel.messages.fetch(options);
-    if (!messages.size) return false;
+  try {
+    // Only inspect the newest 100 messages. The bridge marker/URL is enough
+    // to survive normal Render restarts without walking the entire channel.
+    const messages = await withTimeout(
+      channel.messages.fetch({ limit: 100 }),
+      5000,
+      "Discord history lookup"
+    );
 
     for (const message of messages.values()) {
       if (message.author?.id !== client.user?.id) continue;
       if (String(message.content || "").includes(needle)) return true;
     }
-
-    const oldest = messages.last();
-    if (!oldest || messages.size < 100) return false;
-    before = oldest.id;
+  } catch (error) {
+    // A slow Discord history lookup must never block the relay indefinitely.
+    console.warn("Discord dedupe lookup failed:", error?.message || error);
   }
 
   return false;
@@ -242,12 +253,16 @@ const server = createServer(async (req, res) => {
       const threadUrl = String(body.url || "");
 
       if (!tid || deliveredToDiscord.has(tid)) {
+        console.log(JSON.stringify({ type: "forum_to_discord_ignored", tid, reason: "already-delivered-or-missing-tid" }));
         return json(res, 200, { ok: true, ignored: true }, origin);
       }
 
       if (!client.isReady()) {
+        console.error(JSON.stringify({ type: "forum_to_discord_not_ready", tid }));
         return json(res, 503, { ok: false, error: "discord-not-ready" }, origin);
       }
+
+      console.log(JSON.stringify({ type: "forum_to_discord_received", tid }));
 
       // Multiple browser scanners/tabs can submit the same tid concurrently.
       // Share one in-flight Discord send so the same topic is never sent twice
